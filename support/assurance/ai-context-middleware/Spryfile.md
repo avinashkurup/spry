@@ -5,33 +5,34 @@ sqlpage-conf:
   allow_exec: true
   port: 9227
 ---
+
 ## AI Context Middleware
-
-This script automates the conversion of the latest Secure Controls Framework
+ 
+This script automates the preparation of the RSSD for ai-context-middleware based on the latest Secure Controls Framework
 (SCF) Excel workbook from the
-[official SCF GitHub repository](https://github.com/securecontrolsframework/securecontrolsframework)
-into a structured SQLite database.
-
-- Uses DuckDB with its built-in `excel` and `sqlite` extensions.
-- Reads each major worksheet from the SCF Excel workbook (e.g., _SCF 2025.3_,
-  _Authoritative Sources_, _Assessment Objectives_, etc.).
-- Creates corresponding SQLite tables with matching names (e.g., `scf_control`,
-  `scf_authoritative_source`, etc.).
-- All columns are imported as untyped strings (`VARCHAR`), preserving the
-  original Excel text exactly as-is.
-- Adds a metadata column `scf_xls_source` to every table to record the source
-  workbook name for provenance.
-- Creates a registry view `scf_xls_sheet` listing each imported sheet, its
-  corresponding table, and the source file name.
-
+[official SCF GitHub repository](https://github.com/securecontrolsframework/securecontrolsframework).
+ 
 Instructions:
-
-1. Download the SCF Excel workbook from the GitHub repo.
-2. Run the DuckDB SQL script.
-
-   ```bash
-   rm -f scf-2025.3.sqlite.db && cat prepare.duckdb.sql | duckdb ":memory:"
-   ```
+ 
+1. Use the RSSD created using the instructions in support/assurance/scf/README.md
+2. Run the script to create the database.
+ 
+```bash prepare-aictxe-db --descr "Prepare the AI Context Middleware database"
+surveilr ingest files -r ai-context-engineering -d scf-2025.3.sqlite.db
+cat stateless.sql | sqlite3 scf-2025.3.sqlite.db
+```
+ 
+## SQLPage Dev / Watch mode
+ 
+While you're developing Spry's `dev-src.auto` generator should be used:
+ 
+```bash prepare-sqlpage-dev --descr "Generate the dev-src.auto directory to work in SQLPage dev mode"
+./spry.ts spc --fs dev-src.auto --destroy-first --conf sqlpage/sqlpage.json
+```
+ 
+```bash clean --descr "Clean up the project directory's generated artifacts"
+rm -rf dev-src.auto
+```
 
 ## Layout
 
