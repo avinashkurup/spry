@@ -32,21 +32,10 @@ Spry unifies them. It makes Markdown an **active medium** that:
 
 ## What it looks like
 
-See [lib/notebook/mod_test-fixture-01.md](lib/notebook/mod_test-fixture-01.md).
+See [support/assurance/scf/Spryfile.md](support/assurance/scf/Spryfile.md).
 
 Every fenced block becomes an executable “cell,” every attribute a typed
 directive, and the whole Markdown file turns into a reproducible workflow.
-
-## Key Ideas
-
-- **Executable Markdown** – each fence can run, verify, or emit output.
-- **Composable Materialization** – plug-in modules turn Markdown into SQL, HTML,
-  JSON, or other artifacts.
-- **Type-Safe by Design** – built with Zod + TypeScript generics for predictable
-  DX.
-- **Plugin-Native** – “emitters” and “interpreters” are just Deno modules that
-  Spry can discover and wire automatically.
-- **CLI + API** – use Spry as a command runner, CI step, or embedded library.
 
 ## Why not just use notebooks?
 
@@ -65,3 +54,76 @@ all in one, all executable.
 - Data pipelines defined in Markdown
 - AI prompt notebooks that emit structured JSON
 - Documentation that proves its own examples work
+
+## Getting Started with Spry for SQLPage
+
+Spry can scaffold a complete **Markdown + SQLPage** project in seconds using the
+built-in CLI initializer. You don’t need to manually create `spry.ts` or
+`Spryfile.md` — just run one command.
+
+### Quick Start
+
+Install [`deno 2.5`](https://deno.land) or higher and run the following command
+in an empty directory to bootstrap your project:
+
+```bash
+cd <your-project>  # create a new directory or use an existing one
+deno run -A https://raw.githubusercontent.com/programmablemd/spry/main/lib/sqlpage/cli.ts init
+./spry.ts help
+```
+
+This creates:
+
+| File          | Purpose                                                     |
+| ------------- | ----------------------------------------------------------- |
+| `spry.ts`     | Executable wrapper to run Spry commands locally             |
+| `Spryfile.md` | Executable Markdown defining SQLPage tasks, SQL, and routes |
+
+Both files are ready to use immediately. You can verify the contents with
+`cat spry.ts` and `cat Spryfile.md`.
+
+### Development Mode (Live Reload)
+
+Use `--watch` during development to rebuild automatically when your Markdown
+changes:
+
+```bash
+./spry.ts spc --fs dev-src.auto --destroy-first --conf sqlpage/sqlpage.json --watch --with-sqlpage
+```
+
+- `--watch` monitors Markdown files for changes
+- `--with-sqlpage` restarts SQLPage after each build
+
+Or run SQLPage separately in another terminal and drop `--with-sqlpage`.
+
+### Deployment Mode (Single Database)
+
+After development, you can remove generated files and package everything into
+your database:
+
+```bash
+./spry.ts spc --package --conf sqlpage/sqlpage.json | sqlite3 spry-sqlpage.sqlite.db
+./spry.ts spc --package --conf sqlpage/sqlpage.json | psql
+```
+
+This produces a single SQLite database containing all `sqlpage_files` rows,
+ready for production.
+
+### Understanding the Generated Structure
+
+| File                   | Description                                                        |
+| ---------------------- | ------------------------------------------------------------------ |
+| `spry.ts`              | Project-local Spry runner, importing `CLI` from the correct source |
+| `Spryfile.md`          | Executable Markdown defining tasks, SQL cells, and page routes     |
+| `sqlpage/sqlpage.json` | SQLPage configuration (referenced by `spc` commands)               |
+| `dev-src.auto/`        | Auto-generated SQLPage source directory in development mode        |
+
+Spry parses each fenced code block in `Spryfile.md`, validates its directives,
+and materializes them as executable workflows — all type-safe via TypeScript and
+Zod.
+
+### Next Steps
+
+- Explore [`Spryfile.md`](support/assurance/scf/Spryfile.md) to understand how tasks and SQLPage routes are defined.
+- Add more `bash` or `sql` fences to extend functionality.
+- Run `./spry.ts help` to see available commands.
