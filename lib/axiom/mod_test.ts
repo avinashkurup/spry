@@ -232,24 +232,38 @@ Deno.test(`Axiom regression / smoke test`, async (t) => {
     const { mdastRoot: root } = runbook3;
     const gr = graph(root);
 
-    const contributeCodeBlocks = selectAll("code", root).filter(
-      (n) => (n as Code).lang === importKeyword,
-    ) as Code[];
-    assertEquals(contributeCodeBlocks.length, 1);
+    assertEquals(gr.relCounts, {
+      isImportant: 1,
+      containedInSection: 68,
+      frontmatter: 2,
+      hasIssues: 14,
+      isActionableCodeCandidate: 34,
+      isCode: 37,
+      isDirectiveCandidate: 2,
+    });
 
-    const [firstNode] = contributeCodeBlocks;
+    const contributeCodeBlocks = selectAll("code", root).filter(
+      (n) =>
+        (n as Code).lang === contributeKeyword ||
+        (n as Code).lang === importKeyword,
+    ) as Code[];
+    assertEquals(contributeCodeBlocks.length, 2);
+
+    const [firstNode, secondNode] = contributeCodeBlocks;
+    assertFalse(nodeIssues.is(secondNode));
     assertFalse(nodeIssues.is(firstNode));
 
     assert(isContributeSpec(firstNode));
+    assert(isContributeSpec(secondNode));
+
     const firstContribs = firstNode.contributables({
       allowUrls: true,
       resolveBasePath: (base) =>
-        resolve(dirname(fixtures.contrib1MdPath), base),
+        resolve(dirname(fixtures.runbook3MdPath), base),
     });
     assertEquals(firstContribs.issues.length, 0);
-    const firstRes = Array.from(firstContribs.provenance());
     assertEquals(
-      firstRes.map((r) =>
+      Array.from(firstContribs.provenance()).map((r) =>
         `${r.origin.label} ${r.destPath} [${r.provenance.mimeType}] (${r.origin.lineNumInRawInstructions})`
       ),
       [
@@ -273,53 +287,88 @@ Deno.test(`Axiom regression / smoke test`, async (t) => {
       ],
     );
 
-    assertEquals(Array.from(gr.rels), [
-      "isImportant",
-      "isCode",
-      "hasIssues",
-      "isActionableCodeCandidate",
-      "isDirectiveCandidate",
-    ]);
-
-    assertEquals(gr.relCounts, {
-      isImportant: 1,
-      isCode: 19,
-      isActionableCodeCandidate: 17,
-      hasIssues: 7,
-      isDirectiveCandidate: 1,
+    const secondContribs = secondNode.contributables({
+      allowUrls: true,
+      resolveBasePath: (base) =>
+        resolve(dirname(fixtures.runbook3MdPath), base),
     });
+    assertEquals(secondContribs.issues.length, 0);
+    assertEquals(
+      Array.from(secondContribs.provenance()).map((r) =>
+        `${r.origin.label} ${r.destPath} [${r.provenance.mimeType}] (${r.origin.lineNumInRawInstructions})`
+      ),
+      [
+        "bash synthetic.bash [text/plain] (1)",
+        "bash synthetic.bash [text/plain] (2)",
+        "bash synthetic.sh [text/plain] (2)",
+        "text plain-text.txt [text/plain] (3)",
+        "text plain.html [text/plain] (3)",
+        "text plain.text [text/plain] (3)",
+        "text synthetic.bash [text/plain] (3)",
+        "text synthetic.json [text/plain] (3)",
+        "text synthetic.sh [text/plain] (3)",
+        "utf8 synthetic-01.pdf [application/pdf] (4)",
+        "utf8 synthetic-02.pdf [application/pdf] (4)",
+        "utf8 synthetic.doc [application/msword] (4)",
+        "utf8 synthetic.docx [application/vnd.openxmlformats-officedocument.wordprocessingml.document] (4)",
+        "utf8 synthetic.ppt [application/vnd.ms-powerpoint] (4)",
+        "utf8 synthetic.xls [application/vnd.ms-excel] (4)",
+        "utf8 synthetic.xlsx [application/vnd.openxmlformats-officedocument.spreadsheetml.sheet] (4)",
+        "json 64KB.json [application/json] (5)",
+      ],
+    );
 
     const includedCodeBlocks = selectAll("code", root).filter(
       isIncludedNode<Code>,
     );
-    assertEquals(includedCodeBlocks.length, 17);
-    const re = /MIME '([^']+)' is not text/;
+    assertEquals(includedCodeBlocks.length, 34);
     assertEquals(
       includedCodeBlocks.map((c) =>
-        `${c.lang} ${c.meta?.replace(/--cwd.*/, "--cwd YES")} [${
+        `${c.lang} ${
+          c.meta?.replace(/--cwd.*/, "--cwd YES")
+        } [${c.include.provenance.mimeType} ${
           c.isContentAcquired ? "content acquired" : "content NOT acquired"
         }]`
       ),
       [
-        "bash synthetic.bash --mime text/plain --graph INJECTED_BASH1 --cwd YES [content acquired]",
-        "bash synthetic.bash --mime text/plain --graph INJECTED_BASH2 --cwd YES [content acquired]",
-        "bash synthetic.sh --mime text/plain --graph INJECTED_BASH2 --cwd YES [content acquired]",
-        "text plain-text.txt --mime text/plain --graph INJECTED_FS_TEXT [content acquired]",
-        "text plain.html --mime text/plain --graph INJECTED_FS_TEXT [content acquired]",
-        "text plain.text --mime text/plain --graph INJECTED_FS_TEXT [content acquired]",
-        "text synthetic.bash --mime text/plain --graph INJECTED_FS_TEXT [content acquired]",
-        "text synthetic.json --mime text/plain --graph INJECTED_FS_TEXT [content acquired]",
-        "text synthetic.sh --mime text/plain --graph INJECTED_FS_TEXT [content acquired]",
-        "utf8 synthetic-01.pdf --graph INJECTED_FS_BIN [content NOT acquired]",
-        "utf8 synthetic-02.pdf --graph INJECTED_FS_BIN [content NOT acquired]",
-        "utf8 synthetic.doc --graph INJECTED_FS_BIN [content NOT acquired]",
-        "utf8 synthetic.docx --graph INJECTED_FS_BIN [content NOT acquired]",
-        "utf8 synthetic.ppt --graph INJECTED_FS_BIN [content NOT acquired]",
-        "utf8 synthetic.xls --graph INJECTED_FS_BIN [content NOT acquired]",
-        "utf8 synthetic.xlsx --graph INJECTED_FS_BIN [content NOT acquired]",
-        "json 64KB.json --graph INJECTED_REMOTE [content acquired]",
+        "bash synthetic.bash --mime text/plain [text/plain content acquired]",
+        "bash synthetic.bash --mime text/plain [text/plain content acquired]",
+        "bash synthetic.sh --mime text/plain [text/plain content acquired]",
+        "text plain-text.txt --mime text/plain [text/plain content acquired]",
+        "text plain.html --mime text/plain [text/plain content acquired]",
+        "text plain.text --mime text/plain [text/plain content acquired]",
+        "text synthetic.bash --mime text/plain [text/plain content acquired]",
+        "text synthetic.json --mime text/plain [text/plain content acquired]",
+        "text synthetic.sh --mime text/plain [text/plain content acquired]",
+        "utf8 synthetic-01.pdf  [application/pdf content NOT acquired]",
+        "utf8 synthetic-02.pdf  [application/pdf content NOT acquired]",
+        "utf8 synthetic.doc  [application/msword content NOT acquired]",
+        "utf8 synthetic.docx  [application/vnd.openxmlformats-officedocument.wordprocessingml.document content NOT acquired]",
+        "utf8 synthetic.ppt  [application/vnd.ms-powerpoint content NOT acquired]",
+        "utf8 synthetic.xls  [application/vnd.ms-excel content NOT acquired]",
+        "utf8 synthetic.xlsx  [application/vnd.openxmlformats-officedocument.spreadsheetml.sheet content NOT acquired]",
+        "json 64KB.json  [application/json content acquired]",
+        "bash synthetic.bash --mime text/plain --graph INJECTED_BASH1 --cwd YES [text/plain content acquired]",
+        "bash synthetic.bash --mime text/plain --graph INJECTED_BASH2 --cwd YES [text/plain content acquired]",
+        "bash synthetic.sh --mime text/plain --graph INJECTED_BASH2 --cwd YES [text/plain content acquired]",
+        "text plain-text.txt --mime text/plain --graph INJECTED_FS_TEXT [text/plain content acquired]",
+        "text plain.html --mime text/plain --graph INJECTED_FS_TEXT [text/plain content acquired]",
+        "text plain.text --mime text/plain --graph INJECTED_FS_TEXT [text/plain content acquired]",
+        "text synthetic.bash --mime text/plain --graph INJECTED_FS_TEXT [text/plain content acquired]",
+        "text synthetic.json --mime text/plain --graph INJECTED_FS_TEXT [text/plain content acquired]",
+        "text synthetic.sh --mime text/plain --graph INJECTED_FS_TEXT [text/plain content acquired]",
+        "utf8 synthetic-01.pdf --graph INJECTED_FS_BIN [application/pdf content NOT acquired]",
+        "utf8 synthetic-02.pdf --graph INJECTED_FS_BIN [application/pdf content NOT acquired]",
+        "utf8 synthetic.doc --graph INJECTED_FS_BIN [application/msword content NOT acquired]",
+        "utf8 synthetic.docx --graph INJECTED_FS_BIN [application/vnd.openxmlformats-officedocument.wordprocessingml.document content NOT acquired]",
+        "utf8 synthetic.ppt --graph INJECTED_FS_BIN [application/vnd.ms-powerpoint content NOT acquired]",
+        "utf8 synthetic.xls --graph INJECTED_FS_BIN [application/vnd.ms-excel content NOT acquired]",
+        "utf8 synthetic.xlsx --graph INJECTED_FS_BIN [application/vnd.openxmlformats-officedocument.spreadsheetml.sheet content NOT acquired]",
+        "json 64KB.json --graph INJECTED_REMOTE [application/json content acquired]",
+        ,
       ],
     );
+    const re = /MIME '([^']+)' is not text/;
     assertEquals(
       includedCodeBlocks.map((c) =>
         `${c.lang} ${c.meta?.split(/\s+/)[0]} --graph ${
@@ -333,6 +382,23 @@ Deno.test(`Axiom regression / smoke test`, async (t) => {
         }] (text: ${c.value.length})`
       ),
       [
+        "bash synthetic.bash --graph  --cwd NO [0] (text: 45)",
+        "bash synthetic.bash --graph  --cwd NO [0] (text: 45)",
+        "bash synthetic.sh --graph  --cwd NO [0] (text: 45)",
+        "text plain-text.txt --graph  --cwd NO [0] (text: 26)",
+        "text plain.html --graph  --cwd NO [0] (text: 1050)",
+        "text plain.text --graph  --cwd NO [0] (text: 26)",
+        "text synthetic.bash --graph  --cwd NO [0] (text: 45)",
+        "text synthetic.json --graph  --cwd NO [0] (text: 1814)",
+        "text synthetic.sh --graph  --cwd NO [0] (text: 45)",
+        "utf8 synthetic-01.pdf --graph  --cwd NO [info: MIME 'application/pdf' is not text] (text: 150)",
+        "utf8 synthetic-02.pdf --graph  --cwd NO [info: MIME 'application/pdf' is not text] (text: 150)",
+        "utf8 synthetic.doc --graph  --cwd NO [info: MIME 'application/msword' is not text] (text: 150)",
+        "utf8 synthetic.docx --graph  --cwd NO [info: MIME 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' is not text] (text: 204)",
+        "utf8 synthetic.ppt --graph  --cwd NO [info: MIME 'application/vnd.ms-powerpoint' is not text] (text: 161)",
+        "utf8 synthetic.xls --graph  --cwd NO [info: MIME 'application/vnd.ms-excel' is not text] (text: 156)",
+        "utf8 synthetic.xlsx --graph  --cwd NO [info: MIME 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' is not text] (text: 198)",
+        "json 64KB.json --graph  --cwd NO [0] (text: 63732)",
         "bash synthetic.bash --graph INJECTED_BASH1 --cwd YES [0] (text: 45)",
         "bash synthetic.bash --graph INJECTED_BASH2 --cwd YES [0] (text: 45)",
         "bash synthetic.sh --graph INJECTED_BASH2 --cwd YES [0] (text: 45)",
@@ -352,12 +418,6 @@ Deno.test(`Axiom regression / smoke test`, async (t) => {
         "json 64KB.json --graph INJECTED_REMOTE --cwd NO [0] (text: 63732)",
       ],
     );
-    // for (const node of includedCodeBlocks) {
-    //   assertEquals(
-    //     (node as unknown as Code).value,
-    //     Deno.readTextFileSync(node.include.provenance.path),
-    //   );
-    // }
   });
 
   await t.step(ff.relToCWD(fixtures.runbook4MdPath), () => {
