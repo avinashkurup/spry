@@ -30,8 +30,8 @@ const fixtures = {
   runbook1MdPath: ff.pmdPath("runbook-01.md"),
   runbook2MdPath: ff.pmdPath("runbook-02.md"),
   runbook3MdPath: ff.pmdPath("runbook-03.md"),
-  runbook4MdPath: ff.pmdPath("runbook-04.md"),
   contrib1MdPath: ff.pmdPath("contribute-01.md"),
+  include1MdPath: ff.pmdPath("include-01.md"),
 };
 
 export function isIncludedMaterializableCodeCandidate(
@@ -56,8 +56,8 @@ Deno.test(`Axiom regression / smoke test`, async (t) => {
       fixtures.runbook1MdPath,
       fixtures.runbook2MdPath,
       fixtures.runbook3MdPath,
-      fixtures.runbook4MdPath,
       fixtures.contrib1MdPath,
+      fixtures.include1MdPath,
     ],
     (encountered) => me.push(encountered),
   );
@@ -230,6 +230,123 @@ Deno.test(`Axiom regression / smoke test`, async (t) => {
 
     assert(runbook3);
     const { mdastRoot: root } = runbook3;
+    const gr = graph(root);
+
+    assertEquals(Array.from(gr.rels), [
+      "isCode",
+      "isActionableCodeCandidate",
+      "isTask",
+    ]);
+
+    assertEquals(gr.relCounts, {
+      isCode: 6,
+      isActionableCodeCandidate: 6,
+      isTask: 6,
+    });
+  });
+
+  await t.step(ff.relToCWD(fixtures.contrib1MdPath), () => {
+    const [_, _runbook1, _runbook2, _runbook3, contrib1] = me;
+
+    assert(contrib1);
+    const { mdastRoot: root } = contrib1;
+
+    const contributeCodeBlocks = selectAll("code", root).filter(
+      (n) => (n as Code).lang === contributeKeyword,
+    ) as Code[];
+
+    assertEquals(contributeCodeBlocks.length, 3);
+    const [firstNode, secondNode, includesNodes] = contributeCodeBlocks;
+    assert(isContributeSpec(firstNode));
+    assert(isContributeSpec(secondNode));
+    assert(isContributeSpec(includesNodes));
+
+    const first = firstNode.contributables({
+      resolveBasePath: (base) =>
+        resolve(dirname(fixtures.contrib1MdPath), base),
+    });
+    const firstRes = Array.from(first.provenance());
+    assertEquals(firstRes.map((r) => r.destPath), [
+      "SUNDRY/comma-separated-values.csv",
+      "SUNDRY/group1-allergies.csv",
+      "SUNDRY/group1-care-plans.csv",
+      "SUNDRY/group1-patients.csv",
+      "SUNDRY/pipe-separated-values.psv",
+      "SUNDRY/plain-text.txt",
+      "SUNDRY/plain.html",
+      "SUNDRY/plain.png",
+      "SUNDRY/plain.text",
+      "SUNDRY/real-test.zip",
+      "SUNDRY/sample.sql",
+      "SUNDRY/security-test.tap",
+      "SUNDRY/space-separated-values.ssv",
+      "SUNDRY/synthetic-01.md",
+      "SUNDRY/synthetic-01.pdf",
+      "SUNDRY/synthetic-02.md",
+      "SUNDRY/synthetic-02.pdf",
+      "SUNDRY/synthetic-with-frontmatter.md",
+      "SUNDRY/synthetic-with-unicode.jsonl",
+      "SUNDRY/synthetic.bash",
+      "SUNDRY/synthetic.doc",
+      "SUNDRY/synthetic.docx",
+      "SUNDRY/synthetic.json",
+      "SUNDRY/synthetic.jsonl",
+      "SUNDRY/synthetic.ppt",
+      "SUNDRY/synthetic.sh",
+      "SUNDRY/synthetic.xls",
+      "SUNDRY/synthetic.xlsx",
+      "SUNDRY/synthetic.yml",
+      "SUNDRY/tab-separated-values.tsv",
+      "SUNDRY/unknown-extension.xyz",
+    ]);
+
+    const second = secondNode.contributables({
+      resolveBasePath: (base) =>
+        resolve(dirname(fixtures.contrib1MdPath), base),
+    });
+    const secondRes = Array.from(second.provenance());
+    assertEquals(secondRes.map((r) => [r.origin.label, r.destPath]), [
+      ["CSV", "SUNDRY/comma-separated-values.csv"],
+      ["CSV", "SUNDRY/group1-allergies.csv"],
+      ["CSV", "SUNDRY/group1-care-plans.csv"],
+      ["CSV", "SUNDRY/group1-patients.csv"],
+      ["PDF", "SUNDRY/synthetic-01.pdf"],
+      ["PDF", "SUNDRY/synthetic-02.pdf"],
+      ["zip", "ARCHIVE/real-test.zip"],
+    ]);
+
+    const includedCodeBlocks = selectAll("code", root).filter((n) =>
+      isIncludedNode(n)
+    );
+    assertEquals(
+      includedCodeBlocks.map((
+        r,
+      ) => [r.include.origin.label, r.include.destPath]),
+      [
+        ["csv", "INCLUDE/comma-separated-values.csv"],
+        ["csv", "INCLUDE/group1-allergies.csv"],
+        ["csv", "INCLUDE/group1-care-plans.csv"],
+        ["csv", "INCLUDE/group1-patients.csv"],
+        ["sql", "sample.sql"],
+      ],
+    );
+    for (const node of includedCodeBlocks) {
+      assertEquals(
+        (node as unknown as Code).value,
+        Deno.readTextFileSync(node.include.provenance.path),
+      );
+    }
+    assertEquals(
+      (includedCodeBlocks[4] as unknown as Code).meta,
+      `sample.sql --interpolate --injectable`,
+    );
+  });
+
+  await t.step(ff.relToCWD(fixtures.include1MdPath), () => {
+    const [_, _runbook1, _runbook2, _runbook3, _contrib1, include1] = me;
+
+    assert(include1);
+    const { mdastRoot: root } = include1;
     const gr = graph(root);
 
     assertEquals(gr.relCounts, {
@@ -417,123 +534,6 @@ Deno.test(`Axiom regression / smoke test`, async (t) => {
         "utf8 synthetic.xlsx --graph INJECTED_FS_BIN --cwd NO [info: MIME 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' is not text] (text: 198)",
         "json 64KB.json --graph INJECTED_REMOTE --cwd NO [0] (text: 63732)",
       ],
-    );
-  });
-
-  await t.step(ff.relToCWD(fixtures.runbook4MdPath), () => {
-    const [_, _runbook1, _runbook2, _runbook3, runbook4] = me;
-
-    assert(runbook4);
-    const { mdastRoot: root } = runbook4;
-    const gr = graph(root);
-
-    assertEquals(Array.from(gr.rels), [
-      "isCode",
-      "isActionableCodeCandidate",
-      "isTask",
-    ]);
-
-    assertEquals(gr.relCounts, {
-      isCode: 6,
-      isActionableCodeCandidate: 6,
-      isTask: 6,
-    });
-  });
-
-  await t.step(ff.relToCWD(fixtures.contrib1MdPath), () => {
-    const [_, _runbook1, _runbook2, _runbook3, _runbook4, contrib1] = me;
-
-    assert(contrib1);
-    const { mdastRoot: root } = contrib1;
-
-    const contributeCodeBlocks = selectAll("code", root).filter(
-      (n) => (n as Code).lang === contributeKeyword,
-    ) as Code[];
-
-    assertEquals(contributeCodeBlocks.length, 3);
-    const [firstNode, secondNode, includesNodes] = contributeCodeBlocks;
-    assert(isContributeSpec(firstNode));
-    assert(isContributeSpec(secondNode));
-    assert(isContributeSpec(includesNodes));
-
-    const first = firstNode.contributables({
-      resolveBasePath: (base) =>
-        resolve(dirname(fixtures.contrib1MdPath), base),
-    });
-    const firstRes = Array.from(first.provenance());
-    assertEquals(firstRes.map((r) => r.destPath), [
-      "SUNDRY/comma-separated-values.csv",
-      "SUNDRY/group1-allergies.csv",
-      "SUNDRY/group1-care-plans.csv",
-      "SUNDRY/group1-patients.csv",
-      "SUNDRY/pipe-separated-values.psv",
-      "SUNDRY/plain-text.txt",
-      "SUNDRY/plain.html",
-      "SUNDRY/plain.png",
-      "SUNDRY/plain.text",
-      "SUNDRY/real-test.zip",
-      "SUNDRY/sample.sql",
-      "SUNDRY/security-test.tap",
-      "SUNDRY/space-separated-values.ssv",
-      "SUNDRY/synthetic-01.md",
-      "SUNDRY/synthetic-01.pdf",
-      "SUNDRY/synthetic-02.md",
-      "SUNDRY/synthetic-02.pdf",
-      "SUNDRY/synthetic-with-frontmatter.md",
-      "SUNDRY/synthetic-with-unicode.jsonl",
-      "SUNDRY/synthetic.bash",
-      "SUNDRY/synthetic.doc",
-      "SUNDRY/synthetic.docx",
-      "SUNDRY/synthetic.json",
-      "SUNDRY/synthetic.jsonl",
-      "SUNDRY/synthetic.ppt",
-      "SUNDRY/synthetic.sh",
-      "SUNDRY/synthetic.xls",
-      "SUNDRY/synthetic.xlsx",
-      "SUNDRY/synthetic.yml",
-      "SUNDRY/tab-separated-values.tsv",
-      "SUNDRY/unknown-extension.xyz",
-    ]);
-
-    const second = secondNode.contributables({
-      resolveBasePath: (base) =>
-        resolve(dirname(fixtures.contrib1MdPath), base),
-    });
-    const secondRes = Array.from(second.provenance());
-    assertEquals(secondRes.map((r) => [r.origin.label, r.destPath]), [
-      ["CSV", "SUNDRY/comma-separated-values.csv"],
-      ["CSV", "SUNDRY/group1-allergies.csv"],
-      ["CSV", "SUNDRY/group1-care-plans.csv"],
-      ["CSV", "SUNDRY/group1-patients.csv"],
-      ["PDF", "SUNDRY/synthetic-01.pdf"],
-      ["PDF", "SUNDRY/synthetic-02.pdf"],
-      ["zip", "ARCHIVE/real-test.zip"],
-    ]);
-
-    const includedCodeBlocks = selectAll("code", root).filter((n) =>
-      isIncludedNode(n)
-    );
-    assertEquals(
-      includedCodeBlocks.map((
-        r,
-      ) => [r.include.origin.label, r.include.destPath]),
-      [
-        ["csv", "INCLUDE/comma-separated-values.csv"],
-        ["csv", "INCLUDE/group1-allergies.csv"],
-        ["csv", "INCLUDE/group1-care-plans.csv"],
-        ["csv", "INCLUDE/group1-patients.csv"],
-        ["sql", "sample.sql"],
-      ],
-    );
-    for (const node of includedCodeBlocks) {
-      assertEquals(
-        (node as unknown as Code).value,
-        Deno.readTextFileSync(node.include.provenance.path),
-      );
-    }
-    assertEquals(
-      (includedCodeBlocks[4] as unknown as Code).meta,
-      `sample.sql --interpolate --injectable`,
     );
   });
 });
