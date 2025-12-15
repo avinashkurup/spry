@@ -27,7 +27,6 @@ how to treat `sql` code fenced blocks.
 
 ```code DEFAULTS
 sql * --interpolate --injectable
-envrc * --interpolate --injectable
 ```
 
 The following example shows how arbitrary files can be "contributed" to
@@ -172,21 +171,12 @@ rm -rf dev-src.auto
 
 This raw SQL will be placed into HEAD/TAIL.
 
-```sql TAIL --import ../../../lib/universal/schema-info.dml.sqlite.sql
--- this will be replaced by the content of schema-info.dml.sqlite.sql
-```
-
-This raw SQL will be placed into HEAD/TAIL. Include as a duplicate of the above
-show style-difference between `sql TAIL --import` and `import` which creates
-pseudo-cells.
-
 ```import --base ../../../lib/universal
 sql *.sql TAIL
 ```
 
-💡 `schema-info.dml.sqlite.sql` will appear twice in the output, once as
-`sql.d/tail/0000.sql` and another as `sql.d/tail/schema-info.dml.sqlite.sql`
-because the file is referenced in both the `import` cell and using `--import`.
+💡 `schema-info.dml.sqlite.sql` will appear in the output as
+`sql.d/tail/0000.sql`.
 
 ## Layout
 

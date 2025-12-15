@@ -330,10 +330,6 @@ export function* strategyDecisions<
           };
 
           const childProv = normalizeProvenance(childProvRaw);
-          (childProv as { mimeType?: string }).mimeType = detectMimeFromPath(
-            childProv.path,
-          );
-
           const childStrategy = strategyFromProvenance(childProv) as S;
           yield { provenance: childProv, strategy: childStrategy };
         }

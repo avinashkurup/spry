@@ -1,14 +1,21 @@
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertFalse } from "@std/assert";
 import { dirname, resolve } from "@std/path";
-import { Code } from "types/mdast";
+import { Code, Node } from "types/mdast";
 import { inspect } from "unist-util-inspect";
 import { selectAll } from "unist-util-select";
 import { graphEdgesTree, headingsTreeText } from "./edge/mod.ts";
 import { fixturesFactory } from "./fixture/mod.ts";
+import { nodeIssues } from "./mdast/node-issues.ts";
 import { graph, GraphEdge, graphToDot, MarkdownEncountered } from "./mod.ts";
 import { flexibleProjectionFromFiles } from "./projection/flexible.ts";
 import {
+  isMateriazableCodeCandidate,
+  MaterializableCodeCandidate,
+} from "./remark/actionable-code-candidates.ts";
+import {
   contributeKeyword,
+  importKeyword,
+  IncludedNode,
   isContributeSpec,
   isIncludedNode,
 } from "./remark/contribute-specs-resolver.ts";
@@ -26,6 +33,12 @@ const fixtures = {
   runbook4MdPath: ff.pmdPath("runbook-04.md"),
   contrib1MdPath: ff.pmdPath("contribute-01.md"),
 };
+
+export function isIncludedMaterializableCodeCandidate(
+  n: IncludedNode<Node>,
+): n is IncludedNode<MaterializableCodeCandidate> {
+  return isMateriazableCodeCandidate(n);
+}
 
 Deno.test(`Axiom regression / smoke test`, async (t) => {
   const f = {
@@ -219,17 +232,132 @@ Deno.test(`Axiom regression / smoke test`, async (t) => {
     const { mdastRoot: root } = runbook3;
     const gr = graph(root);
 
+    const contributeCodeBlocks = selectAll("code", root).filter(
+      (n) => (n as Code).lang === importKeyword,
+    ) as Code[];
+    assertEquals(contributeCodeBlocks.length, 1);
+
+    const [firstNode] = contributeCodeBlocks;
+    assertFalse(nodeIssues.is(firstNode));
+
+    assert(isContributeSpec(firstNode));
+    const firstContribs = firstNode.contributables({
+      allowUrls: true,
+      resolveBasePath: (base) =>
+        resolve(dirname(fixtures.contrib1MdPath), base),
+    });
+    assertEquals(firstContribs.issues.length, 0);
+    const firstRes = Array.from(firstContribs.provenance());
+    assertEquals(
+      firstRes.map((r) =>
+        `${r.origin.label} ${r.destPath} [${r.provenance.mimeType}] (${r.origin.lineNumInRawInstructions})`
+      ),
+      [
+        "bash synthetic.bash [text/plain] (1)",
+        "bash synthetic.bash [text/plain] (2)",
+        "bash synthetic.sh [text/plain] (2)",
+        "text plain-text.txt [text/plain] (3)",
+        "text plain.html [text/plain] (3)",
+        "text plain.text [text/plain] (3)",
+        "text synthetic.bash [text/plain] (3)",
+        "text synthetic.json [text/plain] (3)",
+        "text synthetic.sh [text/plain] (3)",
+        "utf8 synthetic-01.pdf [application/pdf] (4)",
+        "utf8 synthetic-02.pdf [application/pdf] (4)",
+        "utf8 synthetic.doc [application/msword] (4)",
+        "utf8 synthetic.docx [application/vnd.openxmlformats-officedocument.wordprocessingml.document] (4)",
+        "utf8 synthetic.ppt [application/vnd.ms-powerpoint] (4)",
+        "utf8 synthetic.xls [application/vnd.ms-excel] (4)",
+        "utf8 synthetic.xlsx [application/vnd.openxmlformats-officedocument.spreadsheetml.sheet] (4)",
+        "json 64KB.json [application/json] (5)",
+      ],
+    );
+
     assertEquals(Array.from(gr.rels), [
       "isImportant",
       "isCode",
+      "hasIssues",
       "isActionableCodeCandidate",
+      "isDirectiveCandidate",
     ]);
 
     assertEquals(gr.relCounts, {
       isImportant: 1,
-      isCode: 18,
-      isActionableCodeCandidate: 18,
+      isCode: 19,
+      isActionableCodeCandidate: 17,
+      hasIssues: 7,
+      isDirectiveCandidate: 1,
     });
+
+    const includedCodeBlocks = selectAll("code", root).filter(
+      isIncludedNode<Code>,
+    );
+    assertEquals(includedCodeBlocks.length, 17);
+    const re = /MIME '([^']+)' is not text/;
+    assertEquals(
+      includedCodeBlocks.map((c) =>
+        `${c.lang} ${c.meta?.replace(/--cwd.*/, "--cwd YES")} [${
+          c.isContentAcquired ? "content acquired" : "content NOT acquired"
+        }]`
+      ),
+      [
+        "bash synthetic.bash --mime text/plain --graph INJECTED_BASH1 --cwd YES [content acquired]",
+        "bash synthetic.bash --mime text/plain --graph INJECTED_BASH2 --cwd YES [content acquired]",
+        "bash synthetic.sh --mime text/plain --graph INJECTED_BASH2 --cwd YES [content acquired]",
+        "text plain-text.txt --mime text/plain --graph INJECTED_FS_TEXT [content acquired]",
+        "text plain.html --mime text/plain --graph INJECTED_FS_TEXT [content acquired]",
+        "text plain.text --mime text/plain --graph INJECTED_FS_TEXT [content acquired]",
+        "text synthetic.bash --mime text/plain --graph INJECTED_FS_TEXT [content acquired]",
+        "text synthetic.json --mime text/plain --graph INJECTED_FS_TEXT [content acquired]",
+        "text synthetic.sh --mime text/plain --graph INJECTED_FS_TEXT [content acquired]",
+        "utf8 synthetic-01.pdf --graph INJECTED_FS_BIN [content NOT acquired]",
+        "utf8 synthetic-02.pdf --graph INJECTED_FS_BIN [content NOT acquired]",
+        "utf8 synthetic.doc --graph INJECTED_FS_BIN [content NOT acquired]",
+        "utf8 synthetic.docx --graph INJECTED_FS_BIN [content NOT acquired]",
+        "utf8 synthetic.ppt --graph INJECTED_FS_BIN [content NOT acquired]",
+        "utf8 synthetic.xls --graph INJECTED_FS_BIN [content NOT acquired]",
+        "utf8 synthetic.xlsx --graph INJECTED_FS_BIN [content NOT acquired]",
+        "json 64KB.json --graph INJECTED_REMOTE [content acquired]",
+      ],
+    );
+    assertEquals(
+      includedCodeBlocks.map((c) =>
+        `${c.lang} ${c.meta?.split(/\s+/)[0]} --graph ${
+          c.include.origin.ppiq.getTextFlagValues("graph")
+        } --cwd ${c.include.origin.ppiq.getTextFlag("cwd") ? "YES" : "NO"} [${
+          nodeIssues.is(c)
+            ? (c.data.issues.map((i) =>
+              `${i.severity}: ${i.message.match(re)?.[0]}`
+            ).join(", "))
+            : 0
+        }] (text: ${c.value.length})`
+      ),
+      [
+        "bash synthetic.bash --graph INJECTED_BASH1 --cwd YES [0] (text: 45)",
+        "bash synthetic.bash --graph INJECTED_BASH2 --cwd YES [0] (text: 45)",
+        "bash synthetic.sh --graph INJECTED_BASH2 --cwd YES [0] (text: 45)",
+        "text plain-text.txt --graph INJECTED_FS_TEXT --cwd NO [0] (text: 26)",
+        "text plain.html --graph INJECTED_FS_TEXT --cwd NO [0] (text: 1050)",
+        "text plain.text --graph INJECTED_FS_TEXT --cwd NO [0] (text: 26)",
+        "text synthetic.bash --graph INJECTED_FS_TEXT --cwd NO [0] (text: 45)",
+        "text synthetic.json --graph INJECTED_FS_TEXT --cwd NO [0] (text: 1814)",
+        "text synthetic.sh --graph INJECTED_FS_TEXT --cwd NO [0] (text: 45)",
+        "utf8 synthetic-01.pdf --graph INJECTED_FS_BIN --cwd NO [info: MIME 'application/pdf' is not text] (text: 150)",
+        "utf8 synthetic-02.pdf --graph INJECTED_FS_BIN --cwd NO [info: MIME 'application/pdf' is not text] (text: 150)",
+        "utf8 synthetic.doc --graph INJECTED_FS_BIN --cwd NO [info: MIME 'application/msword' is not text] (text: 150)",
+        "utf8 synthetic.docx --graph INJECTED_FS_BIN --cwd NO [info: MIME 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' is not text] (text: 204)",
+        "utf8 synthetic.ppt --graph INJECTED_FS_BIN --cwd NO [info: MIME 'application/vnd.ms-powerpoint' is not text] (text: 161)",
+        "utf8 synthetic.xls --graph INJECTED_FS_BIN --cwd NO [info: MIME 'application/vnd.ms-excel' is not text] (text: 156)",
+        "utf8 synthetic.xlsx --graph INJECTED_FS_BIN --cwd NO [info: MIME 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' is not text] (text: 198)",
+        "json 64KB.json --graph INJECTED_REMOTE --cwd NO [0] (text: 63732)",
+      ],
+    );
+    // for (const node of includedCodeBlocks) {
+    //   assertEquals(
+    //     (node as unknown as Code).value,
+    //     Deno.readTextFileSync(node.include.provenance.path),
+    //   );
+    // }
   });
 
   await t.step(ff.relToCWD(fixtures.runbook4MdPath), () => {
@@ -345,7 +473,7 @@ Deno.test(`Axiom regression / smoke test`, async (t) => {
     }
     assertEquals(
       (includedCodeBlocks[4] as unknown as Code).meta,
-      `--interpolate --injectable`,
+      `sample.sql --interpolate --injectable`,
     );
   });
 });

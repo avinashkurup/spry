@@ -37,12 +37,11 @@ import { nodeSrcText } from "../mdast/node-src-text.ts";
 import actionableCodeCandidates from "../remark/actionable-code-candidates.ts";
 import codeDirectiveCandidates from "../remark/code-directive-candidates.ts";
 import {
+  isIncludeSpecBlock,
   isIncludesSpec,
   prepareContributionSpecs,
   prepareIncludedNodes,
 } from "../remark/contribute-specs-resolver.ts";
-import insertImportPlaceholders from "../remark/import-placeholders-generator.ts";
-import resolveImportSpecs from "../remark/import-specs-resolver.ts";
 import nodeDecorator from "../remark/node-decorator.ts";
 
 // deno-lint-ignore no-explicit-any
@@ -70,15 +69,15 @@ export function mardownParserPipeline() {
     mdSrcDirname: dirname(resolve(vfile.path)),
   });
   const consumeEdges = (
-    edges: { generatedBy: Node; placeholder: Node }[],
+    edges: { generatedBy: Node; included: Node }[],
     vfile: VFile,
   ) => {
     if (graphEdgesVFileDataBag.is(vfile)) {
       vfile.data.edges.push(...edges.map((e) => ({
-        rel: "isImportPlaceholder",
+        rel: "isIncludedNode",
         from: e.generatedBy,
-        to: e.placeholder,
-      } satisfies GraphEdge<"isImportPlaceholder">)));
+        to: e.included,
+      } satisfies GraphEdge<"isIncludedNode">)));
     }
   };
 
@@ -88,23 +87,17 @@ export function mardownParserPipeline() {
     .use(remarkDirective) // creates directives from :[x] ::[x] and :::x
     .use(docFrontmatter, { interpolate: true }) // parses extracted YAML and stores at md AST root
     .use(remarkGfm) // support GitHub flavored markdown
-    .use(resolveImportSpecs, { interpolationCtx }) // find code cells which want to be imported from local/remote files
     .use(prepareContributionSpecs, { interpolationCtx }) // find code cells which want to be "contributed" from local/remote files
     .use(prepareIncludedNodes, {
       consumeEdges,
-      isSpecBlock: (spec, vfile) => {
-        if (
-          spec.identity === "include" ||
-          spec.contributeQPI.getFlag("I", "include")
-        ) {
-          return {
+      isSpecBlock: (spec, vfile) =>
+        isIncludeSpecBlock(spec)
+          ? ({
+            allowUrls: true,
             resolveBasePath: (base) => resolve(vfile.dirname!, base),
-          };
-        }
-        return false;
-      },
+          })
+          : false,
     }) // find code cells which want to be "contributed" from local/remote files
-    .use(insertImportPlaceholders, { consumeEdges }) // generate code cells found by resolveImportSpecs
     .use(nodeDecorator) // look for @id and transform to node.type == "decorator"
     .use(codeDirectiveCandidates) // be sure this comes before actionableCodeCandidates
     .use(actionableCodeCandidates);

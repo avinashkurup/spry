@@ -24,8 +24,8 @@ import {
   isMaterializable,
   Materializable,
 } from "../../axiom/projection/playbook.ts";
+import { isIncludedNode } from "../../axiom/remark/contribute-specs-resolver.ts";
 import { docFrontmatterDataBag } from "../../axiom/remark/doc-frontmatter.ts";
-import { isImportPlaceholder } from "../../axiom/remark/import-placeholders-generator.ts";
 import * as axiomCLI from "../../axiom/text-ui/cli.ts";
 import * as runbookCLI from "../../axiom/text-ui/runbook.ts";
 import { collectAsyncGenerated } from "../../universal/collectable.ts";
@@ -88,7 +88,7 @@ const flagsFrom = (spc: SqlPageContent) => {
         isError: false,
         isPartialInjected: false,
         isRouteSupplier: false,
-        isVirtual: spc.cell ? isImportPlaceholder(spc.cell) : false,
+        isVirtual: spc.cell ? isIncludedNode(spc.cell) : false,
         isBinary: isMaterializable(spc.cell)
           ? (spc.cell.isBlob ?? false)
           : false,
@@ -103,7 +103,7 @@ const flagsFrom = (spc: SqlPageContent) => {
         isRouteSupplier: isMaterializable(spc.cell)
           ? (isRouteSupplier(spc.cell?.materializationAttrs) ? true : false)
           : false,
-        isVirtual: spc.cell ? isImportPlaceholder(spc.cell) : false,
+        isVirtual: spc.cell ? isIncludedNode(spc.cell) : false,
         isBinary: isMaterializable(spc.cell)
           ? (spc.cell.isBlob ?? false)
           : false,
@@ -585,7 +585,7 @@ export class CLI<Project> {
               line: s.position?.start.line ?? -1,
               language: s.language?.id ?? "?",
               pi: s.meta ?? "?",
-              virtual: isImportPlaceholder(s) ? "V" : " ",
+              virtual: isIncludedNode(s) ? "V" : " ",
               binary: "?", // TODO: s.sourceElaboration?.isRefToBinary ? "B" : " "
               notebook: s.provenance.file.path ?? "",
             };

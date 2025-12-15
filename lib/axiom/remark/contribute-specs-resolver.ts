@@ -107,9 +107,20 @@ export interface ContributeOptions {
 }
 
 export const contributeKeyword = "contribute" as const;
+export const includeKeyword = "include" as const;
+export const importKeyword = "import" as const;
 
 function defaultIsSpecBlock(code: Code) {
-  return code.lang === contributeKeyword;
+  return code.lang === contributeKeyword || code.lang === includeKeyword ||
+    code.lang === importKeyword;
+}
+
+export function isIncludeSpecBlock(spec: ContributeSpec) {
+  return spec.lang === includeKeyword || spec.lang === importKeyword ||
+      spec.identity === includeKeyword || spec.identity === importKeyword ||
+      spec.contributeQPI.getFlag("I", includeKeyword, importKeyword)
+    ? true
+    : false;
 }
 
 function contributeSpecs(
@@ -185,7 +196,7 @@ export const prepareContributionSpecs: Plugin<[ContributeOptions?], Root> = (
         addIssue(code, {
           severity: "error",
           message:
-            "Contribute spec block is missing a target identity (expected ```contribute <target>).",
+            `Contribute spec block is missing a target identity (expected \`\`\`${code.lang} <target>).`,
         });
         return;
       }
@@ -221,7 +232,8 @@ export const prepareContributionSpecs: Plugin<[ContributeOptions?], Root> = (
         }
 
         return resourceContributions(cs.specsSrc, {
-          labeled: opts?.labeled ?? cs.contributeSF.data.labeled ?? false,
+          labeled: opts?.labeled ?? cs.contributeSF.data.labeled ??
+            isIncludeSpecBlock(node),
           fromBase: cs.contributeSF.data.base,
           destPrefix: opts?.destPrefix ?? cs.contributeSF.data.dest,
           allowUrls: opts?.allowUrls ?? false,
@@ -240,12 +252,14 @@ export type IncludesSpec = Code & {
 
 export function isIncludesSpec(code: Node): code is IncludesSpec {
   const c = code as unknown as Partial<IncludesSpec>;
-  return !!(c && typeof c === "object" && Array.isArray(c.includables));
+  return !!(c && typeof c === "object" && Array.isArray(c.includables)) &&
+    typeof c.resolveIncludes === "function";
 }
 
 export type IncludedNode<N extends Node> = N & {
   readonly include: ResourceContribution<ContributeSpecLine>;
   readonly acquireContent: () => Promise<void>;
+  isContentAcquired: boolean;
 };
 
 export function isIncludedNode<N extends Node>(
@@ -268,7 +282,7 @@ export interface IncludeNodeInsertOptions {
   ) => IncludedNode<Node>;
   readonly retainAfterInjections?: (node: Node) => boolean;
   readonly consumeEdges?: (
-    edges: { generatedBy: Node; placeholder: Node }[],
+    edges: { generatedBy: Node; included: Node }[],
     vfile: VFile,
     tree: Root,
   ) => void;
@@ -277,8 +291,10 @@ export interface IncludeNodeInsertOptions {
 const generatedCodeNode: IncludeNodeInsertOptions["generatedNode"] = (ctx) => {
   const {
     rc: {
-      origin: { label: lang, lineNumInRawInstructions: pathLine, restArgs },
+      destPath,
+      origin: { label: lang, lineNumInRawInstructions: pathLine, meta },
       provenance,
+      strategy,
     },
     specs,
   } = ctx;
@@ -292,16 +308,27 @@ const generatedCodeNode: IncludeNodeInsertOptions["generatedNode"] = (ctx) => {
   const result: IncludedNode<Code> = {
     type: "code",
     lang,
-    meta: restArgs.filter((a) => a.startsWith("-")).join(" "),
+    meta: `${destPath} ${meta}`,
     value:
-      `will be replaced by value of ${provenance.path} (${provenance.mimeType})`,
+      `should be replaced by text value of ${provenance.path} (${provenance.mimeType})`,
     position: position ? { start: position, end: position } : undefined,
     include: ctx.rc,
+    isContentAcquired: false,
     acquireContent: async () => {
+      if (strategy.encoding !== "utf8-text") {
+        addIssues(result, [{
+          message:
+            `MIME '${provenance.mimeType}' is not text, ${provenance.path} not injected into code[${lang}].value`,
+          severity: "info",
+        }]);
+        return;
+      }
+
       const r = provenanceResource(ctx.rc);
       const text = await r.safeText();
       if (typeof text === "string") {
         result.value = text;
+        result.isContentAcquired = true;
       } else {
         addIssues(result, [{
           message:
@@ -363,7 +390,7 @@ export const prepareIncludedNodes: Plugin<[IncludeNodeInsertOptions], Root> = (
 
         if (options?.consumeEdges) {
           options.consumeEdges(
-            generated.map((g) => ({ generatedBy: code, placeholder: g })),
+            generated.map((g) => ({ generatedBy: code, included: g })),
             vfile,
             tree,
           );

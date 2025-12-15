@@ -5,18 +5,12 @@ import {
   codeFrontmatter,
 } from "../../axiom/mdast/code-frontmatter.ts";
 import { Directive, Materializable } from "../../axiom/projection/playbook.ts";
-import { isImportPlaceholder } from "../../axiom/remark/import-placeholders-generator.ts";
 import {
   ensureLanguageByIdOrAlias,
   languageHandlers,
 } from "../../universal/code.ts";
 import { isAsyncIterator } from "../../universal/collectable.ts";
 import { RenderResult } from "../../universal/render.ts";
-import {
-  provenanceResource,
-  ResourceProvenance,
-  strategyFromProvenance,
-} from "../../universal/resource.ts";
 import {
   isRouteSupplier,
   mutateRoutePaths,
@@ -400,37 +394,10 @@ export function contentSuppliers() {
     ...candidate,
   });
 
-  const contentsFromResource = async (rp: ResourceProvenance) => {
-    let contents: SqlPageFileUpsert["contents"];
-    let isBinary: SqlPageFileUpsert["isBinary"];
-    const resource = provenanceResource({
-      provenance: rp,
-      strategy: strategyFromProvenance(rp),
-    });
-    if (resource.strategy.encoding === "utf8-binary") {
-      contents = await resource.stream();
-      isBinary = contents;
-    } else {
-      contents = await resource.text();
-      isBinary = false as const;
-    }
-    return { contents, isBinary };
-  };
-
-  const contents = async (code: Code, codeFM: CodeFrontmatter | null) => {
-    if (isImportPlaceholder(code)) {
-      return await contentsFromResource(code.importSpecProvenance);
-    } else {
-      if (
-        codeFM?.pi && "import" in codeFM.pi.flags &&
-        typeof codeFM.pi.flags.import === "string"
-      ) {
-        return await contentsFromResource({ path: codeFM.pi.flags.import });
-      } else {
-        return { contents: code.value, isBinary: false as const };
-      }
-    }
-  };
+  const contents = (code: Code, _codeFM: CodeFrontmatter | null) => ({
+    contents: code.value,
+    isBinary: false as const,
+  });
 
   const langHandlers = languageHandlers<
     [Materializable, {
@@ -438,7 +405,7 @@ export function contentSuppliers() {
     }],
     SqlPageContent | false | Promise<SqlPageContent | false>
   >({
-    defaultHandler: async (materializable) => {
+    defaultHandler: (materializable) => {
       const codeFM = codeFrontmatter(materializable);
       if (!(codeFM?.pi.flags) || !("spc" in codeFM?.pi.flags)) return false;
       const path = materializable.materializableIdentity;
@@ -449,14 +416,14 @@ export function contentSuppliers() {
         isUnsafeInterpolatable: materializable.materializationArgs.interpolate,
         isInjectableCandidate: materializable.materializationArgs.injectable,
         cell: materializable,
-        ...await contents(materializable, codeFM),
+        ...contents(materializable, codeFM),
       };
     },
   });
 
   langHandlers.register(
     sqlCodeCellLangSpec,
-    async (materializable, { registerIssue }) => {
+    (materializable, { registerIssue }) => {
       const path = materializable.materializableIdentity;
       mutateRouteInCellAttrs(materializable, path, registerIssue);
       return {
@@ -467,14 +434,14 @@ export function contentSuppliers() {
         isUnsafeInterpolatable: true,
         isInjectableCandidate: true,
         cell: materializable,
-        ...await contents(materializable, codeFrontmatter(materializable)),
+        ...contents(materializable, codeFrontmatter(materializable)),
       };
     },
   );
 
   langHandlers.register(
     ensureLanguageByIdOrAlias("css"),
-    async (materializable) => ({
+    (materializable) => ({
       kind: "sqlpage_file_upsert",
       path: materializable.materializableIdentity,
       isRoutable: false,
@@ -482,7 +449,7 @@ export function contentSuppliers() {
       isUnsafeInterpolatable: true,
       isInjectableCandidate: false,
       cell: materializable,
-      ...await contents(materializable, codeFrontmatter(materializable)),
+      ...contents(materializable, codeFrontmatter(materializable)),
     }),
   );
 
@@ -500,5 +467,5 @@ export function contentSuppliers() {
     }),
   );
 
-  return { ...langHandlers, sqlSPF, jsonSPF, contents, contentsFromResource };
+  return { ...langHandlers, sqlSPF, jsonSPF, contents };
 }

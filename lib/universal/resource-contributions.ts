@@ -3,41 +3,64 @@
  *
  * Parse a plain-text “contribution spec” into a stream of resolved resource contributions,
  * suitable for ingestion/materialization pipelines that need:
- * - consistent destination paths (destPrefix + relative path)
+ * - consistent destination paths (either a direct destPath or destPrefix + relative path)
  * - provenance metadata per contribution (line number, raw spec line, parsed instruction record)
  * - a resource access strategy decision (local filesystem vs remote URL, plus related hints)
  *
  * This module is intentionally “two-stage”:
- * 1) `origins()` yields validated spec lines (including parsed args) and records any issues.
- * 2) `prepared()` expands each origin across one or more bases, runs `strategyDecisions(...)`,
+ * 1) `specs()` yields validated spec lines and records any issues.
+ * 2) `provenance()` expands each spec across one or more bases, runs `strategyDecisions(...)`,
  *    and yields concrete contribution objects with computed `destPath`.
  *
- * Spec grammar
- * - Unlabeled (default): `<candidate> [<destPrefix>] ...`
- * - Labeled (when `args.labeled` is true): `<label> <candidate> [<destPrefix>] ...`
+ * Spec grammar (updated)
  *
- * Each line is processed through:
- * - optional `transform(line, lineNum)` hook; return `false` to skip the line
- * - `instructionsFromText(...)` and `queryPosixPI(...)` so flags like `--base=...` can be read
+ * There is one shared positional “dest token” after the candidate. Its meaning depends on
+ * whether the candidate is multi-target (glob) or single-target (including URLs).
  *
- * Base resolution
- * - `args.fromBase` defines default bases for the entire block (string or string[]).
- * - A line may override bases using `--base <value>` flags (read via Posix PI parsing).
- * - `args.resolveBasePath(base)` may rewrite base strings (e.g., normalize, map aliases).
+ * - Unlabeled:
+ *   - Multi-target candidate:  `<candidate-multiple> [<destPrefix>] ...`
+ *   - Single candidate / URL: `<candidate-single-or-url> <destPath> ...`
  *
- * Destination prefix
- * - A contribution must have a destination prefix.
- * - It is taken from the line’s optional `[<destPrefix>]` argument when provided, otherwise
- *   from `args.destPrefix`. If neither is present, an error issue is recorded and that line
- *   yields no contributions.
+ * - Labeled (when `args.labeled` is true):
+ *   - Multi-target candidate:  `<label> <candidate-multiple> [<destPrefix>] ...`
+ *   - Single candidate / URL: `<label> <candidate-single-or-url> <destPath> ...`
+ *
+ * Interpretation rules:
+ * - Candidate is HTTP/HTTPS URL        → single-target; dest token means destPath (required,
+ *                                       but may be "." / "./dir" via resolveDestPath()).
+ * - Candidate is a glob/multi-target   → dest token means destPrefix (optional; may fall back
+ *                                       to args.destPrefix; one of them must exist).
+ * - Candidate is a single local path   → dest token means destPath (required, but may be "."
+ *                                       / "./dir" via resolveDestPath()).
+ *
+ * Flags and “meta”
+ *
+ * This module consumes:
+ * - optional `label`
+ * - `candidate`
+ * - optional positional `destToken`
+ *
+ * Everything else positional (after those consumed tokens) is preserved as an opaque `meta`
+ * string on the spec line. Flags are available via `ir`/`ppiq` (Posix PI parsing) and are
+ * intentionally not duplicated into `meta`.
+ *
+ * MIME override
+ * - Each spec line may provide `--mime <MIME TYPE>`.
+ * - If present, it is applied to ResourceProvenance.mimeType BEFORE strategyDecisions(),
+ *   affecting encoding selection (`utf8-text` vs `utf8-binary`) consistently.
+ *
+ * Destination behavior (updated)
+ * - In prefix-mode (multi-target), destPrefix is applied and a relative segment is appended:
+ *     destPath = normalize(join(destPrefix, relativeSegment))
+ * - In path-mode (single local / URL), destToken is resolved into the final destPath:
+ *     destPath = normalize(resolvedDestPath)
+ *   destPrefix is undefined in this mode.
  *
  * URL handling
  * - If a candidate parses as HTTP/HTTPS and `args.allowUrls` is not true, an error issue is
  *   recorded and the line is skipped.
- * - For URL candidates, `prepared()` uses the first effective base only (bases[0]) when
- *   constructing the strategy decision input.
- * - When a remote URL is selected, `destPath` is computed using `relativeUrlAsFsPath(...)`
- *   to create a deterministic, filesystem-safe relative path from the URL.
+ * - For URL candidates, we use the first effective base only (bases[0]) when constructing
+ *   the strategy decision input (keeps behavior deterministic when multiple bases exist).
  *
  * Issues reporting
  * - This module does not throw on bad lines by default; it accumulates `issues[]` entries with
@@ -46,16 +69,24 @@
  * Generic typing
  * - `resourceContributions(...)` is generic over the parsed line “shape” and the resulting
  *   contribution type.
- * - Use `args.toContribution(...)` to enrich/extend the emitted contribution objects while
+ * - Use `args.toContribution(...)` to enrich/extend emitted contribution objects while
  *   preserving type information.
  *
- * Primary exports
- * - `resourceContributions(text, args)`:
- *   returns `{ blockBases, issues, origins, prepared }`.
- * - `relativeUrlAsFsPath(base, url)`:
- *   converts a URL into a stable filesystem-relative path segment for destination mapping.
+ * Notes on type-safety upgrades (unobvious but important)
+ * - We avoid attaching ad-hoc `__line` / `__destPrefix` fields and then deleting them. Instead
+ *   we define a typed “strategy input” provenance shape that carries internal metadata safely
+ *   through `strategyDecisions(...)` (including glob expansion).
+ * - `specs()` is re-iterable: we cache validated spec lines to prevent single-use generator
+ *   surprises (tests often call `specs()` before `provenance()`).
  */
-import { join, normalize, relative } from "@std/path";
+
+import {
+  basename,
+  isGlob as stdIsGlob,
+  join,
+  normalize,
+  relative,
+} from "@std/path";
 import z from "@zod/zod";
 import {
   instructionsFromText,
@@ -65,6 +96,7 @@ import {
 } from "./posix-pi.ts";
 import {
   detectMimeFromPath,
+  hasGlobChar,
   provenanceResource,
   Resource,
   ResourceLabel,
@@ -82,6 +114,30 @@ export type FlexibleContributionsFlags = {
   readonly base?: unknown;
 };
 
+/**
+ * Destination intent as a discriminated union.
+ *
+ * - kind:"prefix" → multi-target mode; destPath is computed as prefix + relative segment
+ * - kind:"path"   → single-target mode; destPath is the final destination path
+ */
+export type Dest =
+  | { readonly kind: "prefix"; readonly value: string }
+  | { readonly kind: "path"; readonly value: string };
+
+type CandidateKind =
+  | { readonly kind: "remote-url"; readonly url: URL }
+  | { readonly kind: "glob" }
+  | { readonly kind: "single-path" };
+
+function classifyCandidate(candidate: string): CandidateKind {
+  const url = tryParseHttpUrl(candidate);
+  if (url) return { kind: "remote-url", url };
+
+  // Align with resource.ts default behavior: stdIsGlob, plus common glob metacharacters.
+  const isGlobLike = stdIsGlob(candidate) || hasGlobChar(candidate);
+  return isGlobLike ? { kind: "glob" } : { kind: "single-path" };
+}
+
 export type ContributeSpecLineParsed<Shape> = z.ZodSafeParseResult<Shape>;
 
 export type ContributeSpecLine<Shape = unknown> = {
@@ -89,9 +145,28 @@ export type ContributeSpecLine<Shape = unknown> = {
   readonly rawInstructions: string;
   readonly ir: InstructionsResult;
   readonly ppiq: PosixPIQuery;
+
   readonly label?: string;
   readonly candidate: string;
-  readonly restArgs: readonly string[];
+
+  /**
+   * The 2nd positional token (after candidate), if present.
+   * Interpreted later as either:
+   * - destPrefix (glob/multi-target), or
+   * - destPath (single local / URL), potentially through a resolver.
+   */
+  readonly destToken?: string;
+
+  /**
+   * Opaque positional remainder after this module consumes:
+   * - label (optional)
+   * - candidate
+   * - destToken (optional)
+   *
+   * Unobvious: flags are not duplicated here. Flags are available via `ir` / `ppiq`.
+   */
+  readonly meta: string;
+
   readonly parsedArgs?: ContributeSpecLineParsed<Shape>;
 };
 
@@ -128,9 +203,13 @@ function* textContributions<Shape = unknown>(
     const required = labeled ? 2 : 1;
     if (args.length < required) continue;
 
+    // Consume the structured head of the line.
     const label = labeled ? args.shift() : undefined;
     const candidate = args.shift() ?? "";
-    const restArgs = args;
+
+    // Consume the dest token (optional). What remains becomes meta.
+    const destToken = args.shift();
+    const meta = args.join(" ");
 
     const baseLine: Omit<ContributeSpecLine<unknown>, "parsedArgs"> = {
       lineNumInRawInstructions: lineNum,
@@ -139,16 +218,13 @@ function* textContributions<Shape = unknown>(
       ppiq,
       ...(label !== undefined ? { label } : null),
       candidate,
-      restArgs,
+      ...(destToken !== undefined ? { destToken } : null),
+      meta,
     };
 
     const schema = opts?.schema ? opts.schema(baseLine) : false;
     if (schema) {
-      const schemaInput = {
-        ...baseLine,
-        restArgs: [...restArgs],
-      };
-      const parsedArgs = schema.safeParse(schemaInput);
+      const parsedArgs = schema.safeParse(baseLine);
 
       yield {
         ...(baseLine as unknown as Omit<
@@ -163,9 +239,17 @@ function* textContributions<Shape = unknown>(
   }
 }
 
+/**
+ * A contribution always has:
+ * - `dest` (prefix-mode or path-mode, discriminated)
+ * - `destPath` (final destination path string)
+ *
+ * `destPrefix` is provided only for prefix-mode for convenience.
+ */
 export type ResourceContribution<SpecLine extends ContributeSpecLine> = {
-  readonly destPrefix: string;
+  readonly dest: Dest;
   readonly destPath: string;
+  readonly destPrefix?: string;
   readonly origin: SpecLine;
   readonly provenance: ResourceProvenance;
   readonly strategy: ResourceStrategy;
@@ -179,7 +263,7 @@ export type ResourceContributionsIssue = {
 };
 
 export type ResourceContributionsResult<
-  Shape extends { destPrefix?: string },
+  Shape extends { destToken?: string },
   SpecLine extends ContributeSpecLine<Shape>,
   Contribution extends ResourceContribution<SpecLine>,
 > = Readonly<{
@@ -190,6 +274,8 @@ export type ResourceContributionsResult<
   resources: () => Generator<
     Resource<
       {
+        // Unobvious: `mimeType` is REQUIRED at this boundary for consumer DX.
+        // We ensure the key is always present in resources().
         mimeType: string | undefined;
         destPath: string;
         spec: SpecLine;
@@ -205,35 +291,194 @@ export type ResourceContributionsResult<
 
 type LabeledShape<
   Labeled extends boolean,
-  Base extends { destPrefix?: string },
+  Base extends { destToken?: string },
 > = Labeled extends true ? (Base & { label: string }) : Base;
 
+/**
+ * Parse only what is present on the line.
+ *
+ * We intentionally do NOT attempt to decide whether destToken is a prefix or a path here.
+ * That decision depends on candidate classification (URL vs glob vs single-path).
+ */
 function resourceContributionsSchema<
-  Shape extends { destPrefix?: string },
+  Shape extends { destToken?: string },
 >(
   labeled: boolean,
 ): z.ZodType<Shape> {
-  // We only parse what's present on the line. destPrefix may be omitted.
-  // Rest args: [destPrefix? ...]
   const base = z.object({
-    restArgs: z.array(z.string()),
     label: labeled ? z.string().min(1) : z.string().min(1).optional(),
+    destToken: z.string().min(1).optional(),
+    meta: z.string(),
+    candidate: z.string().min(1),
   });
 
   return base.transform((raw) => {
-    const out: Record<string, unknown> = {};
-    const destPrefix = raw.restArgs[0];
-    if (destPrefix !== undefined) out.destPrefix = destPrefix;
-    if (raw.label !== undefined) out.label = raw.label;
-    return out as Shape;
+    return {
+      ...(raw.label !== undefined ? { label: raw.label } : null),
+      ...(raw.destToken !== undefined ? { destToken: raw.destToken } : null),
+    } as Shape;
   });
 }
 
+/**
+ * Internal “strategy input” provenance.
+ *
+ * This is intentionally a ResourceProvenance superset so that:
+ * - strategyDecisions() can treat it as provenance (it reads `path`, `mimeType`, etc.)
+ * - our extra metadata survives glob expansion (resource.ts copies baseProv fields to children)
+ *
+ * Unobvious detail: carrying `base` through provenance means the base used for join/relative
+ * calculations stays attached even after glob expansion replaces `path` with matched child paths.
+ */
+type StrategyInput<SpecLine> = ResourceProvenance & {
+  readonly base: string;
+  readonly __origin: SpecLine;
+  readonly __dest: Dest;
+};
+
+function normalizePosixPath(p: string): string {
+  return normalize(p).replace(/\\/g, "/");
+}
+
+/**
+ * Compute the effective MIME type for a spec line.
+ *
+ * - `--mime <type>` wins (and is applied BEFORE strategyDecisions()).
+ * - otherwise infer from the candidate string (best-effort).
+ */
+function mimeFromLine(
+  line: ContributeSpecLine,
+  candidate: string,
+): string | undefined {
+  const flag = line.ppiq.getTextFlag("mime");
+  if (flag && flag.length > 0) return flag;
+  return detectMimeFromPath(candidate);
+}
+
+/**
+ * Deterministically derive a filesystem-ish path from a URL relative to a base URL.
+ *
+ * This replaces the old `relativeUrlAsFsPath(...)` helper entirely.
+ *
+ * Rules:
+ * - If base and URL share origin, attempt to strip the base pathname prefix.
+ * - Otherwise, preserve hostname + pathname.
+ * - query/hash are appended (sanitized) so distinct URLs map to distinct dest paths.
+ *
+ * Unobvious: we always sanitize `: ? & #` because these are problematic in filenames.
+ */
+function urlPathRelativeToBase(base: string, url: string): string {
+  const sanitize = (s: string) => s.replace(/[:?&#]/g, "_");
+
+  try {
+    const u = new URL(url, base);
+    const b = new URL(base, base);
+
+    // Different origins: include host to avoid collisions.
+    if (u.origin !== b.origin) {
+      const p = u.pathname.replace(/^\/+/, "");
+      let out = `${u.hostname}/${p}`;
+      if (u.search) out += sanitize(u.search);
+      if (u.hash) out += sanitize(u.hash);
+      return normalizePosixPath(out);
+    }
+
+    // Same origin: make path relative to base.pathname if possible.
+    const basePath = b.pathname.endsWith("/") ? b.pathname : `${b.pathname}/`;
+    let rel = u.pathname.startsWith(basePath)
+      ? u.pathname.slice(basePath.length)
+      : u.pathname;
+    rel = rel.replace(/^\/+/, "");
+
+    if (u.search) rel += sanitize(u.search);
+    if (u.hash) rel += sanitize(u.hash);
+
+    return normalizePosixPath(rel);
+  } catch {
+    // If URL parsing fails, fall back to a safe-ish normalization.
+    return normalizePosixPath(url);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                Dest-path resolver callbacks (DX convenience)               */
+/* -------------------------------------------------------------------------- */
+
+export type ResolveDestPathContext<
+  SpecLine extends ContributeSpecLine = ContributeSpecLine,
+> = {
+  /** Only for single-target candidates; globs use destPrefix rules. */
+  readonly kind: "remote-url" | "single-path";
+  readonly candidate: string;
+  /** Effective first base (after line-level overrides + resolveBasePath). */
+  readonly base: string;
+  /** Present when kind==="remote-url". */
+  readonly url?: URL;
+  /** Raw dest token from the line (may be ".", "./dir", or explicit). */
+  readonly destToken?: string;
+  readonly origin: SpecLine;
+};
+
+export type ResolveDestPath<
+  SpecLine extends ContributeSpecLine = ContributeSpecLine,
+> = (
+  ctx: ResolveDestPathContext<SpecLine>,
+) => string | undefined;
+
+function isAutoDestTokenDefault(token?: string): boolean {
+  if (!token) return false;
+  const t = token.trim();
+  return t === "." || t === "./";
+}
+
+/**
+ * Default resolver for single-path and URL candidates.
+ *
+ * - token "." / "./" => auto:
+ *   - URL: derive base-relative URL path
+ *   - local: basename(candidate)
+ * - token "./some/dir" => join(dir, basename(...))
+ * - otherwise: explicit destPath
+ */
+function defaultResolveDestPath(
+  ctx: ResolveDestPathContext,
+): string | undefined {
+  const token = ctx.destToken?.trim();
+
+  // Explicit destPath (most predictable: user wrote a path, we take it as-is).
+  if (token && !isAutoDestTokenDefault(token) && !token.startsWith("./")) {
+    return token;
+  }
+
+  // "./dir" convenience: put basename under that dir.
+  if (token && token.startsWith("./") && token !== "./" && token !== ".") {
+    const baseName = ctx.kind === "remote-url"
+      ? basename(new URL(ctx.candidate, ctx.base).pathname)
+      : basename(ctx.candidate);
+    return join(token, baseName);
+  }
+
+  // Auto token "." or "./".
+  if (isAutoDestTokenDefault(token)) {
+    if (ctx.kind === "remote-url") {
+      return urlPathRelativeToBase(ctx.base, ctx.candidate);
+    }
+    return basename(ctx.candidate);
+  }
+
+  // Missing token: caller decides (default behavior treats this as error).
+  return undefined;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                               Main export                                  */
+/* -------------------------------------------------------------------------- */
+
 export function resourceContributions<
   const Labeled extends boolean = false,
-  Shape extends LabeledShape<Labeled, { destPrefix?: string }> = LabeledShape<
+  Shape extends LabeledShape<Labeled, { destToken?: string }> = LabeledShape<
     Labeled,
-    { destPrefix?: string }
+    { destToken?: string }
   >,
   SpecLine extends ContributeSpecLine<Shape> = ContributeSpecLine<Shape>,
   Contribution extends ResourceContribution<SpecLine> = ResourceContribution<
@@ -242,7 +487,7 @@ export function resourceContributions<
 >(
   text: string,
   args?: {
-    /** Enable labeled grammar: `<label> <candidate> [<destPrefix>] ...` */
+    /** Enable labeled grammar: `<label> <candidate> <destToken?> ...` */
     readonly labeled?: Labeled;
 
     /**
@@ -252,8 +497,10 @@ export function resourceContributions<
     readonly fromBase?: string | string[];
 
     /**
-     * Default destination prefix applied when a line omits `<destPrefix>`.
-     * If a line provides `<destPrefix>`, it wins.
+     * Default destination prefix used only for prefix-mode (multi-target) lines
+     * when the line omits destToken.
+     *
+     * In path-mode (single / URL), the dest token is required (but may be ".").
      */
     readonly destPrefix?: string;
 
@@ -266,10 +513,24 @@ export function resourceContributions<
     /** Optional pre-parse line transform. Return false to skip a line. */
     readonly transform?: (line: string, lineNum: number) => string | false;
 
-    /** Optional hook to enrich contribution outputs while preserving generic typing. */
+    /**
+     * Optional hook to resolve destPath for single-path + URL candidates.
+     *
+     * Typical use: "." and "./dir" conventions, custom mapping, hashing, etc.
+     * If omitted, defaults to:
+     * - URL + "." => urlPathRelativeToBase(base, url)
+     * - local + "." => basename(candidate)
+     * - "./dir" => join("./dir", basename(...))
+     */
+    readonly resolveDestPath?: ResolveDestPath<SpecLine>;
+
+    /**
+     * Optional hook to enrich contribution outputs while preserving generic typing.
+     */
     readonly toContribution?: (base: {
-      destPrefix: string;
+      dest: Dest;
       destPath: string;
+      destPrefix?: string;
       origin: SpecLine;
       provenance: ResourceProvenance;
       strategy: ResourceStrategy;
@@ -287,14 +548,20 @@ export function resourceContributions<
 
   const schema = resourceContributionsSchema<Shape>(labeled);
 
-  const specLines = textContributions<Shape>(text, {
-    labeled,
-    transform: args?.transform,
-    schema: () => schema,
-  });
+  // Re-iterable specs: cache validated lines once (best DX).
+  let cachedSpecs: SpecLine[] | undefined;
 
-  function* specs(): Generator<SpecLine> {
-    for (const line of specLines) {
+  const buildSpecsOnce = (): SpecLine[] => {
+    if (cachedSpecs) return cachedSpecs;
+
+    const out: SpecLine[] = [];
+    for (
+      const line of textContributions<Shape>(text, {
+        labeled,
+        transform: args?.transform,
+        schema: () => schema,
+      })
+    ) {
       if (!line.parsedArgs) continue;
 
       if (!line.parsedArgs.success) {
@@ -303,13 +570,12 @@ export function resourceContributions<
           line: line.lineNumInRawInstructions,
           rawInstructions: line.rawInstructions,
           message: labeled
-            ? `Invalid spec line (expected "<label> <candidate> [<destPrefix>] ..."), skipping.`
-            : `Invalid spec line (expected "<candidate> [<destPrefix>] ..."), skipping.`,
+            ? `Invalid spec line (expected "<label> <candidate> <destToken?> ..."), skipping.`
+            : `Invalid spec line (expected "<candidate> <destToken?> ..."), skipping.`,
         });
         continue;
       }
 
-      // URL gate (do it here so prepared() can assume allowed)
       if (tryParseHttpUrl(line.candidate) && !args?.allowUrls) {
         issues.push({
           severity: "error",
@@ -320,28 +586,26 @@ export function resourceContributions<
         continue;
       }
 
-      yield line as unknown as SpecLine;
+      out.push(line as unknown as SpecLine);
     }
+
+    cachedSpecs = out;
+    return out;
+  };
+
+  function* specs(): Generator<SpecLine> {
+    for (const s of buildSpecsOnce()) yield s;
   }
 
   function* provenance(): Generator<Contribution> {
-    const inputs = Array.from(specs()).flatMap((line) => {
-      const parsed = line.parsedArgs!;
-      const lineDestPrefix = parsed.success
-        ? parsed.data.destPrefix
-        : undefined;
-      const effectiveDestPrefix = lineDestPrefix ?? args?.destPrefix;
+    const inputs: StrategyInput<SpecLine>[] = [];
 
-      if (!effectiveDestPrefix || effectiveDestPrefix.length === 0) {
-        issues.push({
-          severity: "error",
-          line: line.lineNumInRawInstructions,
-          rawInstructions: line.rawInstructions,
-          message:
-            `Missing destPrefix: provide "<destPrefix>" on the line or pass args.destPrefix.`,
-        });
-        return [];
-      }
+    for (const line of specs()) {
+      const parsed = line.parsedArgs!;
+      const destToken = parsed.success ? parsed.data.destToken : undefined;
+
+      const candidatePath = line.candidate;
+      const candidateKind = classifyCandidate(candidatePath);
 
       const specBases = line.ppiq.getTextFlagValues("base");
       let bases = specBases.length > 0 ? specBases : blockBases;
@@ -349,63 +613,148 @@ export function resourceContributions<
         bases = bases.map((b) => args.resolveBasePath!(b));
       }
 
-      const candidatePath = line.candidate;
-      const mime = detectMimeFromPath(candidatePath);
+      // Deterministic base selection for single-target lines (single local + URL).
+      const base0 = bases[0] ?? ".";
 
-      if (tryParseHttpUrl(candidatePath)) {
-        const base = bases[0] ?? "";
-        return [{
-          base,
-          path: candidatePath,
-          ...(mime ? { mimeType: mime } : null),
-          __line: line,
-          __destPrefix: effectiveDestPrefix,
-        }] as const;
-      }
-
-      return bases.map((base) => ({
-        base,
-        path: join(base, candidatePath),
+      // MIME override is applied here (before strategyDecisions()).
+      const mime = mimeFromLine(line, candidatePath);
+      const baseProvCommon: Pick<ResourceProvenance, "mimeType"> = {
         ...(mime ? { mimeType: mime } : null),
-        __line: line,
-        __destPrefix: effectiveDestPrefix,
-      }));
-    });
-
-    for (
-      const sd of strategyDecisions(
-        inputs as unknown as Iterable<
-          & { base: string; path: string; mimeType?: string }
-          & Record<string, unknown>
-        >,
-      )
-    ) {
-      const p = sd.provenance as typeof inputs[number];
-
-      const strategy = sd.strategy;
-
-      const rel = strategy.target === "local-fs"
-        ? relative(p.base, p.path)
-        : relativeUrlAsFsPath(
-          p.base,
-          strategy.url?.toString() ?? String(p.path),
-        );
-
-      const destPath = normalize(join(p.__destPrefix as string, rel))
-        .replace(/\\/g, "/");
-
-      const baseOut = {
-        destPrefix: p.__destPrefix as string,
-        destPath,
-        origin: p.__line as SpecLine,
-        provenance: sd.provenance,
-        strategy,
       };
 
-      // deno-lint-ignore no-explicit-any
-      const pMutate = p as any;
-      delete pMutate["__destPrefix"];
-      delete pMutate["__line"];
+      // --- URL: path-mode (destPath) with "." convenience via resolver -----------
+      if (candidateKind.kind === "remote-url") {
+        const resolver = args?.resolveDestPath ?? defaultResolveDestPath;
+        const resolved = resolver({
+          kind: "remote-url",
+          candidate: candidatePath,
+          base: base0,
+          url: candidateKind.url,
+          destToken,
+          origin: line,
+        });
+
+        if (!resolved || resolved.length === 0) {
+          issues.push({
+            severity: "error",
+            line: line.lineNumInRawInstructions,
+            rawInstructions: line.rawInstructions,
+            message:
+              `Missing destPath: URL candidates require "<destPath>" (or use "." / "./dir" for auto).`,
+          });
+          continue;
+        }
+
+        inputs.push({
+          path: candidatePath,
+          label: candidatePath,
+          ...baseProvCommon,
+          base: base0,
+          __origin: line,
+          __dest: { kind: "path", value: resolved },
+        });
+
+        continue;
+      }
+
+      // --- Single local: path-mode (destPath) with "." convenience via resolver ---
+      if (candidateKind.kind === "single-path") {
+        const resolver = args?.resolveDestPath ?? defaultResolveDestPath;
+        const resolved = resolver({
+          kind: "single-path",
+          candidate: candidatePath,
+          base: base0,
+          destToken,
+          origin: line,
+        });
+
+        if (!resolved || resolved.length === 0) {
+          issues.push({
+            severity: "error",
+            line: line.lineNumInRawInstructions,
+            rawInstructions: line.rawInstructions,
+            message:
+              `Missing destPath: single candidates require "<destPath>" (or use "." / "./dir" for auto).`,
+          });
+          continue;
+        }
+
+        inputs.push({
+          path: join(base0, candidatePath),
+          label: candidatePath,
+          ...baseProvCommon,
+          base: base0,
+          __origin: line,
+          __dest: { kind: "path", value: resolved },
+        });
+
+        continue;
+      }
+
+      // --- Glob: prefix-mode (destPrefix) ---------------------------------------
+      const effectivePrefix = (destToken && destToken.length > 0)
+        ? destToken
+        : args?.destPrefix;
+
+      if (!effectivePrefix || effectivePrefix.length === 0) {
+        issues.push({
+          severity: "error",
+          line: line.lineNumInRawInstructions,
+          rawInstructions: line.rawInstructions,
+          message:
+            `Missing destPrefix: glob candidates require "[destPrefix]" or args.destPrefix.`,
+        });
+        continue;
+      }
+
+      for (const base of bases) {
+        inputs.push({
+          path: join(base, candidatePath),
+          label: candidatePath,
+          ...baseProvCommon,
+          base,
+          __origin: line,
+          __dest: { kind: "prefix", value: effectivePrefix },
+        });
+      }
+    }
+
+    for (const sd of strategyDecisions(inputs)) {
+      const p = sd.provenance as StrategyInput<SpecLine>;
+      const strategy = sd.strategy;
+
+      const dest = p.__dest;
+
+      const destPath = dest.kind === "path"
+        ? normalizePosixPath(dest.value)
+        : (() => {
+          // In prefix-mode we always append a relative segment.
+          const rel = strategy.target === "local-fs"
+            ? relative(p.base, p.path)
+            : urlPathRelativeToBase(
+              p.base,
+              strategy.url?.toString() ?? String(p.path),
+            );
+
+          return normalizePosixPath(join(dest.value, rel));
+        })();
+
+      // Strip internal metadata
+      const {
+        base: _omitBase,
+        __origin: _omitOrigin,
+        __dest: _omitDest,
+        ...provOut
+      } = p;
+
+      const baseOut = {
+        dest,
+        destPath,
+        ...(dest.kind === "prefix" ? { destPrefix: dest.value } : null),
+        origin: p.__origin,
+        provenance: provOut as ResourceProvenance,
+        strategy,
+      };
 
       yield args?.toContribution
         ? args.toContribution(baseOut)
@@ -415,11 +764,14 @@ export function resourceContributions<
 
   function* resources() {
     for (const p of provenance()) {
-      const { ppiq } = p.origin;
+      // Ensure mimeType exists as a KEY (even if undefined) to satisfy the
+      // ResourceContributionsResult.resources() return type contract.
+      const mimeType = p.provenance.mimeType ?? undefined;
+
       yield provenanceResource({
         provenance: {
           ...p.provenance,
-          mimeType: ppiq.getTextFlag("mime") ?? p.provenance.mimeType,
+          mimeType,
           destPath: p.destPath,
           spec: p.origin,
         },
@@ -429,35 +781,4 @@ export function resourceContributions<
   }
 
   return { blockBases, issues, specs, provenance, resources } as const;
-}
-
-/**
- * Convert a URL (or URL-like input) into a deterministic filesystem-relative path.
- */
-export function relativeUrlAsFsPath(base: string, url: string): string {
-  try {
-    const from = new URL(url, base);
-    const baseUrl = new URL(base, base);
-
-    if (from.origin !== baseUrl.origin) {
-      return normalize(
-        from.hostname +
-          from.pathname.replace(/^\/+/, "").replace(/[:?&#]/g, "_"),
-      );
-    }
-
-    let rel = from.pathname.startsWith(baseUrl.pathname)
-      ? from.pathname.slice(baseUrl.pathname.length)
-      : from.pathname;
-
-    if (from.search) rel += from.search.replace(/[?&#]/g, "_");
-    if (from.hash) rel += from.hash.replace(/[?&#]/g, "_");
-
-    return normalize(rel.replace(/^\/+/, ""));
-  } catch {
-    const path = url.startsWith(base)
-      ? url.slice(base.length).replace(/^\/+/, "")
-      : url;
-    return normalize(join(".", path));
-  }
 }
