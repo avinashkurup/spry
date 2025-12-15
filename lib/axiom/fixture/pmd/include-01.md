@@ -33,8 +33,8 @@ json https://microsoftedge.github.io/Demos/json-dummy-data/64KB.json 64KB.json -
 ```
 
 When importing text the content is immediately loaded but if the content is
-binary then it's the responsibility of the processing engine to streatm it and
-do something with it.
+binary then it's the responsibility of the processing engine to stream it and do
+something with it.
 
 ## Alternatives
 
