@@ -24,7 +24,7 @@ import {
   isMaterializable,
   Materializable,
 } from "../../axiom/projection/playbook.ts";
-import { isIncludedNode } from "../../axiom/remark/contribute-specs-resolver.ts";
+import { isIncludedNode } from "../../axiom/remark/code-contribute.ts";
 import { docFrontmatterDataBag } from "../../axiom/remark/doc-frontmatter.ts";
 import * as axiomCLI from "../../axiom/text-ui/cli.ts";
 import * as runbookCLI from "../../axiom/text-ui/runbook.ts";

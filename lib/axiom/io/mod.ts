@@ -35,13 +35,13 @@ import { GraphEdge } from "../edge/mod.ts";
 import { dataBag } from "../mdast/data-bag.ts";
 import { nodeSrcText } from "../mdast/node-src-text.ts";
 import actionableCodeCandidates from "../remark/actionable-code-candidates.ts";
-import codeDirectiveCandidates from "../remark/code-directive-candidates.ts";
 import {
   isIncludeSpecBlock,
   isIncludesSpec,
   prepareContributionSpecs,
   prepareIncludedNodes,
-} from "../remark/contribute-specs-resolver.ts";
+} from "../remark/code-contribute.ts";
+import codeDirectiveCandidates from "../remark/code-directive-candidates.ts";
 import nodeDecorator from "../remark/node-decorator.ts";
 
 // deno-lint-ignore no-explicit-any

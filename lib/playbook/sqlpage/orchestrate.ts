@@ -14,7 +14,7 @@ import {
   contributeKeyword,
   ContributeSpec,
   isContributeSpec,
-} from "../../axiom/remark/contribute-specs-resolver.ts";
+} from "../../axiom/remark/code-contribute.ts";
 import { docFrontmatterDataBag } from "../../axiom/remark/doc-frontmatter.ts";
 import { annotationsFactory } from "../../universal/annotations.ts";
 import { MarkdownDoc } from "../../universal/fluent-md.ts";

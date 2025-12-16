@@ -18,7 +18,7 @@ import {
   IncludedNode,
   isContributeSpec,
   isIncludedNode,
-} from "./remark/contribute-specs-resolver.ts";
+} from "./remark/code-contribute.ts";
 
 // deno-lint-ignore no-explicit-any
 type Any = any;
