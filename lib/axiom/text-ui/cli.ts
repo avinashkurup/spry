@@ -10,12 +10,10 @@
 import { Command } from "@cliffy/command";
 import { CompletionsCommand } from "@cliffy/completions";
 import { HelpCommand } from "@cliffy/help";
-
 import { bold, gray, magenta, yellow } from "@std/fmt/colors";
-
 import type { Node, Position } from "types/unist";
 import { inspect } from "unist-util-inspect";
-
+import { selectAll } from "unist-util-select";
 import { ListerBuilder } from "../../universal/lister-tabular-tui.ts";
 import { TreeLister } from "../../universal/lister-tree-tui.ts";
 import { shebang } from "../../universal/pmd-shebang.ts";
@@ -269,6 +267,16 @@ export class CLI {
           }
 
           for await (const mdAST of markdownASTs(markdownPaths)) {
+            // mdast `inspect` does not like functions in code nodes
+            // (like `contributables` in ContributeSpec)
+            selectAll("code", mdAST.mdastRoot).forEach((code) => {
+              const obj = code as unknown as Record<string, unknown>;
+              for (const key in obj) {
+                if (typeof obj[key] === "function") {
+                  delete obj[key];
+                }
+              }
+            });
             console.log(inspect(mdAST.mdastRoot, { color: options.color }));
           }
         },
