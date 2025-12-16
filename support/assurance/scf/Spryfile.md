@@ -169,14 +169,17 @@ rm -rf dev-src.auto
 
 ## Raw SQL
 
-This raw SQL will be placed into HEAD/TAIL.
+This raw SQL will be placed into HEAD/TAIL. As an example, copy the same file
+twice to show how it can be renamed.
 
-```import --base ../../../lib/universal
-sql *.sql TAIL
+```include --base ../../../lib/universal
+sql *.sql sql.d/tail
+sql schema-info.dml.sqlite.sql sql.d/tail/0000.sql
 ```
 
 💡 `schema-info.dml.sqlite.sql` will appear in the output as
-`sql.d/tail/0000.sql`.
+`sql.d/tail/0000.sql` and `sql.d/tail/schema-info.dml.sqlite.sql` (doing it
+twice just for testing).
 
 ## Layout
 
