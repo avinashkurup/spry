@@ -1,5 +1,5 @@
 /**
- * content/code.ts
+ * code.ts
  * General-purpose "code content" DX:
  *  - Language registry (comment syntax, extensions, shebangs)
  *  - Code-specific governance type

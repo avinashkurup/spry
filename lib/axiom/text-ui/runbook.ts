@@ -25,13 +25,12 @@ import {
   ColumnDef,
   ListerBuilder,
 } from "../../universal/lister-tabular-tui.ts";
-import { markdownShellEventBus } from "../../universal/shell-mdbus.ts";
 import {
   errorOnlyShellEventBus,
-  shell,
-  ShellBusEvents,
+  markdownShellEventBus,
   verboseInfoShellEventBus,
-} from "../../universal/shell.ts";
+} from "../../universal/shell-bus.ts";
+import { shell, ShellBusEvents } from "../../universal/shell.ts";
 import {
   executionPlanVisuals,
   ExecutionPlanVisualStyle,
