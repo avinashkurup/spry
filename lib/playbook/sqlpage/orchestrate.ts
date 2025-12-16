@@ -215,7 +215,7 @@ export async function* sqlPageFiles(
           kind: "head_sql",
           path: ensureExtn(`sql.d/head/${d.identity}`, ".sql"),
           cell: d,
-          ...await contents(d, codeFrontmatter(d)),
+          ...contents(d, codeFrontmatter(d)),
         } satisfies SqlPageHeadOrTail;
         break;
 
@@ -224,7 +224,7 @@ export async function* sqlPageFiles(
           kind: "tail_sql",
           path: ensureExtn(`sql.d/tail/${d.identity}`, ".sql"),
           cell: d,
-          ...await contents(d, codeFrontmatter(d)),
+          ...contents(d, codeFrontmatter(d)),
         } satisfies SqlPageHeadOrTail;
         break;
 
