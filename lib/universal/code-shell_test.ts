@@ -30,7 +30,7 @@ function s(u8: Uint8Array): string {
   return td.decode(u8);
 }
 
-async function hasSqlite3(): Promise<boolean> {
+export async function hasSqlite3(): Promise<boolean> {
   try {
     const { success } = await new Deno.Command("sqlite3", {
       args: ["-version"],
@@ -43,7 +43,7 @@ async function hasSqlite3(): Promise<boolean> {
   }
 }
 
-async function hasDuckdb(): Promise<boolean> {
+export async function hasDuckdb(): Promise<boolean> {
   try {
     const cmd = new Deno.Command("duckdb", {
       args: ["--version"],
@@ -57,8 +57,8 @@ async function hasDuckdb(): Promise<boolean> {
   }
 }
 
-const sqliteAvailable = await hasSqlite3();
-const duckdbAvailable = await hasDuckdb();
+export const sqliteAvailable = await hasSqlite3();
+export const duckdbAvailable = await hasDuckdb();
 
 Deno.test({
   name: "sqlite3Engine (:memory:): SQL execution (subtests)",
