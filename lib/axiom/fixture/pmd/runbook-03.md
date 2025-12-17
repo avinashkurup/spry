@@ -1,9 +1,9 @@
 This fixture demonstrates **how to run or list specific tasks** using graph
 tags:
 
-- Running `--graph A` will execute **Task-1** and **Task-4**
-- Running `--graph B` will execute **Task-2** and **Task-5**
-- Running `--graph C` will execute **Task-3** and **Task-6**
+- Running `--graph A` should execute **Task-1** and **Task-4**
+- Running `--graph B` should execute **Task-2** and **Task-5**
+- Running `--graph C` should execute **Task-3** and **Task-6**
 
 ```bash task-1 --graph A --descr "A demo task-1"
 echo "Task-1 ran successfully"
@@ -29,12 +29,13 @@ echo "Task-5 ran successfully"
 echo "Task-6 ran successfully"
 ```
 
-Commands used:
+## How to run specific graphs
 
-- For `/runbook/cli.ts`:
+You can "select" nodes for runs by single or multiple `graph`s.
 
-  `../lib/runbook/cli.ts run fixture-04.md --visualize ascii-tree --graph A`
-
-- For `spry.ts`:
-
-- `./spry.ts task ls --md fixture-04.md --select 'flags.graph == "A"'`
+```bash
+bin/spry.ts rb run ./lib/axiom/fixture/pmd/runbook-03.md --graph A
+bin/spry.ts rb run ./lib/axiom/fixture/pmd/runbook-03.md --graph B
+bin/spry.ts rb run ./lib/axiom/fixture/pmd/runbook-03.md --graph C
+bin/spry.ts rb run ./lib/axiom/fixture/pmd/runbook-03.md --graph B --graph A
+```

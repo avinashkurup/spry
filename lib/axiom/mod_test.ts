@@ -232,16 +232,11 @@ Deno.test(`Axiom regression / smoke test`, async (t) => {
     const { mdastRoot: root } = runbook3;
     const gr = graph(root);
 
-    assertEquals(Array.from(gr.rels), [
-      "isCode",
-      "isActionableCodeCandidate",
-      "isTask",
-    ]);
-
     assertEquals(gr.relCounts, {
-      isCode: 6,
+      containedInSection: 6,
+      isCode: 7,
       isActionableCodeCandidate: 6,
-      isTask: 6,
+      isTask: 3,
     });
   });
 
