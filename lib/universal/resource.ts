@@ -201,6 +201,22 @@ const makeLoaders = <
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Turn plain path into ResourceProvenance object.
+ *
+ * - `path` is the original string
+ * - `label` defaults to the path
+ * - `mimeType` is guessed from the file extension (if any)
+ */
+export function provenanceFromPath(path: ResourcePath): ResourceProvenance {
+  const mime = detectMimeFromPath(path);
+  return {
+    path,
+    label: path,
+    ...(mime ? { mimeType: mime } : null),
+  };
+}
+
+/**
  * Turn plain paths into ResourceProvenance objects.
  *
  * - `path` is the original string
@@ -211,12 +227,7 @@ export function* provenanceFromPaths(
   paths: Iterable<ResourcePath>,
 ): Iterable<ResourceProvenance> {
   for (const path of paths) {
-    const mime = detectMimeFromPath(path);
-    yield {
-      path,
-      label: path,
-      ...(mime ? { mimeType: mime } : null),
-    };
+    yield provenanceFromPath(path);
   }
 }
 
@@ -752,12 +763,7 @@ export function relativeTo<
 export function resourceFromPath(
   path: ResourcePath,
 ): Resource<ResourceProvenance, ResourceStrategy> {
-  const iter = provenanceFromPaths([path])[Symbol.iterator]();
-  const first = iter.next();
-  if (first.done || !first.value) {
-    throw new Error(`No provenance for path: ${path}`);
-  }
-  const provenance = first.value;
+  const provenance = provenanceFromPath(path);
   return provenanceResource<ResourceProvenance, ResourceStrategy>({
     provenance,
     strategy: strategyFromProvenance(provenance),
