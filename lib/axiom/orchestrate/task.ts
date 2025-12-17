@@ -47,11 +47,8 @@
  */
 import { eventBus } from "../../universal/event-bus.ts";
 import { renderer } from "../../universal/render.ts";
-import {
-  shell,
-  ShellBusEvents,
-  textInfoShellEventBus,
-} from "../../universal/shell.ts";
+import { shell, ShellBusEvents } from "../../universal/shell.ts";
+import { textInfoShellEventBus } from "../../universal/shell-bus.ts";
 import {
   executeDAG,
   fail,
