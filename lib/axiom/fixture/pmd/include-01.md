@@ -36,6 +36,23 @@ When importing text the content is immediately loaded but if the content is
 binary then it's the responsibility of the processing engine to stream it and do
 something with it.
 
+## Style 3
+
+The following shows includes which pull in text content (not binary) into
+defined `code` cells:
+
+```sql mySQL1 --include "${mdSrcDirname}/../sundry/sample.sql"
+-- this should be replaced with the content of sundry/sample.sql.
+```
+
+```csv myCSV1 --include "${mdSrcDirname}/../sundry/comma-separated-values.csv"
+this should be replaced with the content of sundry/comma-separated-values.csv.
+```
+
+```json myJSON1 --include https://microsoftedge.github.io/Demos/json-dummy-data/64KB.json
+this should be replaced with the content of https://microsoftedge.github.io/Demos/json-dummy-data/64KB.json
+```
+
 ## Alternatives
 
 These are identical, `import` and `include` are shortcuts for

@@ -38,11 +38,17 @@ import {
 } from "../../universal/resource-contributions.ts";
 
 import { assert } from "@std/assert/assert";
-import { provenanceResource } from "../../universal/resource.ts";
+import {
+  provenanceFromPath,
+  provenanceResource,
+  resourceFromPath,
+  ResourceProvenance,
+} from "../../universal/resource.ts";
 import {
   type CodeFrontmatter,
   codeFrontmatter,
 } from "../mdast/code-frontmatter.ts";
+import { dataBag } from "../mdast/data-bag.ts";
 import { addIssue, addIssues } from "../mdast/node-issues.ts";
 import {
   CodeDirectiveCandidate,
@@ -166,6 +172,71 @@ function contributeSpecs(
   };
 }
 
+export type ExternalResource<N extends Node> = N & {
+  includeResource: ResourceProvenance;
+  acquireResources: () => Promise<void>;
+  resourcesAcquired: boolean;
+};
+
+export function isExternalResource<N extends Node>(
+  node: Node,
+): node is ExternalResource<N> {
+  return node && "includeResource" in node && node.includeResource
+    ? true
+    : false;
+}
+
+export const interpolatedCodeMeta = dataBag<
+  "isInterpolatedCodeMeta",
+  { original: string },
+  Code
+>("isInterpolatedCodeMeta");
+
+export function externalResource(
+  code: Code,
+  interpolationCtx?: Record<string, unknown>,
+) {
+  const originalMeta = code.meta;
+  if (!originalMeta?.includes("--include")) return;
+
+  if (interpolationCtx) {
+    code.meta = safeInterpolate(originalMeta, { code, ...interpolationCtx });
+    interpolatedCodeMeta.attach(code, { original: originalMeta });
+  }
+  const codeFM = codeFrontmatter(code);
+  const include = codeFM?.pi.flags["include"];
+  if (typeof include === "string") {
+    const erNode = code as ExternalResource<Code>;
+    const provenance = provenanceFromPath(include);
+    erNode.includeResource = provenance;
+    erNode.resourcesAcquired = false;
+    erNode.acquireResources = async () => {
+      const r = resourceFromPath(include);
+      if (r.strategy.encoding !== "utf8-text") {
+        addIssues(code, [{
+          message:
+            `MIME '${r.provenance.mimeType}' is not text, ${r.provenance.path} not injected into code[${code.lang}].value`,
+          severity: "info",
+        }]);
+        return;
+      }
+
+      const text = await r.safeText();
+      if (typeof text === "string") {
+        code.value = text;
+        erNode.resourcesAcquired = true;
+      } else {
+        addIssues(code, [{
+          message:
+            `Unable to resolve include content ${r.provenance.path} (${r.provenance.mimeType})`,
+          severity: "error",
+          error: text,
+        }]);
+      }
+    };
+  }
+}
+
 export const prepareContributionSpecs: Plugin<[ContributeOptions?], Root> = (
   options,
 ) => {
@@ -174,7 +245,14 @@ export const prepareContributionSpecs: Plugin<[ContributeOptions?], Root> = (
 
   return (tree, vfile) => {
     visit(tree, "code", (code: Code) => {
-      if (!isSpecBlock(code)) return;
+      if (!isSpecBlock(code)) {
+        // we just want to process an include for a single code block
+        if (code.meta?.includes("--include")) {
+          externalResource(code, interpolationCtx?.(tree, vfile));
+        }
+        return;
+      }
+
       if (isContributeSpec(code)) return;
 
       const iCtx = interpolationCtx?.(tree, vfile);
@@ -257,8 +335,8 @@ export function isIncludesSpec(code: Node): code is IncludesSpec {
 }
 
 export type IncludedNode<N extends Node> = N & {
-  readonly include: ResourceContribution<ContributeSpecLine>;
-  readonly acquireContent: () => Promise<void>;
+  include: ResourceContribution<ContributeSpecLine>;
+  acquireContent: () => Promise<void>;
   isContentAcquired: boolean;
 };
 

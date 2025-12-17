@@ -17,6 +17,7 @@ import {
   importKeyword,
   IncludedNode,
   isContributeSpec,
+  isExternalResource,
   isIncludedNode,
 } from "./remark/code-contribute.ts";
 
@@ -346,11 +347,11 @@ Deno.test(`Axiom regression / smoke test`, async (t) => {
 
     assertEquals(gr.relCounts, {
       isImportant: 1,
-      containedInSection: 68,
-      frontmatter: 2,
+      containedInSection: 76,
+      frontmatter: 3,
       hasIssues: 14,
-      isActionableCodeCandidate: 34,
-      isCode: 37,
+      isActionableCodeCandidate: 37,
+      isCode: 40,
       isDirectiveCandidate: 2,
     });
 
@@ -528,6 +529,29 @@ Deno.test(`Axiom regression / smoke test`, async (t) => {
         "utf8 synthetic.xls --graph INJECTED_FS_BIN --cwd NO [info: MIME 'application/vnd.ms-excel' is not text] (text: 156)",
         "utf8 synthetic.xlsx --graph INJECTED_FS_BIN --cwd NO [info: MIME 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' is not text] (text: 198)",
         "json 64KB.json --graph INJECTED_REMOTE --cwd NO [0] (text: 63732)",
+      ],
+    );
+
+    const externals = selectAll("code", root).filter(
+      isExternalResource<Code>,
+    );
+    assertEquals(externals.length, 3);
+    assertEquals(
+      externals.map((c) =>
+        `${c.lang} ${
+          c.meta?.replace(/--include.*/, "--include YES")
+        } ${c.includeResource.mimeType} [${
+          nodeIssues.is(c)
+            ? (c.data.issues.map((i) =>
+              `${i.severity}: ${i.message.match(re)?.[0]}`
+            ).join(", "))
+            : 0
+        }] (text: ${c.value.length})`
+      ),
+      [
+        "sql mySQL1 --include YES application/sql [0] (text: 1291)",
+        "csv myCSV1 --include YES text/csv [0] (text: 8288)",
+        "json myJSON1 --include YES application/json [0] (text: 63732)",
       ],
     );
   });

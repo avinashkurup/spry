@@ -36,6 +36,7 @@ import { dataBag } from "../mdast/data-bag.ts";
 import { nodeSrcText } from "../mdast/node-src-text.ts";
 import actionableCodeCandidates from "../remark/actionable-code-candidates.ts";
 import {
+  isExternalResource,
   isIncludeSpecBlock,
   isIncludesSpec,
   prepareContributionSpecs,
@@ -206,6 +207,11 @@ export async function* markdownASTs<
       for (const code of selectAll("code", mdastRoot)) {
         if (isIncludesSpec(code)) {
           await code.resolveIncludes();
+        }
+      }
+      for (const code of selectAll("code", mdastRoot)) {
+        if (isExternalResource(code) && !code.resourcesAcquired) {
+          await code.acquireResources();
         }
       }
     }
